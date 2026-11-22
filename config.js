@@ -30,8 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "4.5",
+  version: "4.6",
   whatsNew: [
+    "🛟 New safety net calculator: see how much you need for 3 months, 6 months or a year, and how long your savings would last",
     "👛 Tap See transactions on any budget to see what's in it, and move anything to another category right there",
     "📚 See and search all your transactions at once with the new All time view",
     "☑️ Select many transactions at once and move them to a category in one tap",
@@ -606,15 +607,15 @@ window.CONFIG = {
     },
     {
       id: "full", emoji: "🏡", color: "#6fb79a", title: "Grow your safety net: 3 months, 6 months, 1 year",
-      short: "Start with 3 months of needs. Then 6. Then a whole year if you like!",
+      short: "Start with 3 months of your safety net (needs plus most wants). Then 6. Then a whole year if you like!",
       why: "This is what turns money stress into money calm. Job change, health thing, family emergency: you're covered. Start with 3 months. Six is extra peace of mind.",
       term: ["Emergency fund", "Money only for real surprises. Not trips, not sales. It's your 'I've got this' fund."],
       items: [
         { id: "needs", text: "Know your monthly needs (rent, food, bills)", auto: (s, H) => H.needs > 0, go: { page: "budgets" } },
-        { id: "three", text: "Save 3 months of needs", auto: (s, H) => H.needs > 0 && H.emergency >= H.needs * 3, go: { page: "goals" } },
+        { id: "three", text: "Save 3 months of your safety net", auto: (s, H) => (H.efMonthly || H.needs) > 0 && H.emergency >= (H.efMonthly || H.needs) * 3, go: { page: "goals" } },
         // bonus: true = nice to have. It doesn't hold up the step, and ticking it gives extra XP
-        { id: "six", bonus: true, text: "Save 6 months of needs", auto: (s, H) => H.needs > 0 && H.emergency >= H.needs * 6, go: { page: "goals" } },
-        { id: "year", bonus: true, text: "Save a whole year of needs", auto: (s, H) => H.needs > 0 && H.emergency >= H.needs * 12, go: { page: "goals" } }
+        { id: "six", bonus: true, text: "Save 6 months of your safety net", auto: (s, H) => (H.efMonthly || H.needs) > 0 && H.emergency >= (H.efMonthly || H.needs) * 6, go: { page: "goals" } },
+        { id: "year", bonus: true, text: "Save a whole year of your safety net", auto: (s, H) => (H.efMonthly || H.needs) > 0 && H.emergency >= (H.efMonthly || H.needs) * 12, go: { page: "goals" } }
       ]
     },
     {

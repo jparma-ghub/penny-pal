@@ -68,6 +68,7 @@
       rules: C.autoRules.map(([match, cat]) => ({ match, cat })),
       transactions: [], subs: [], goals: [], accounts: [], netHistory: [], credit: [], reminders: [], dismissed: {},
       feed: { ticks: {}, history: {}, full: {}, coins: {}, lastYm: "" },
+      efund: { needsPct: 100, wantsPct: 75 },
       tax: { income: 0, otherIncome: 0, payFrequency: "biweekly", withheldPerPay: 0, rrsp: 0, fhsa: 0, unionDues: 0, childcare: 0, rentPaid: 0 },
       retire: { age: 0, retireAge: 0, balance: 0, monthly: 0, lump: 0, rate: 6, inflation: C.retirement.inflation, account: "RRSP", cpp: C.retirement.cppMonthlyDefault, includeGov: true },
       house: { price: 0, saved: 0, monthlySave: 0, down: "min", firstTime: true, toronto: true, rate: 4.5, amort: 25, monthlyCosts: 0 },
@@ -323,13 +324,49 @@
     }
   }
   /* Money path: the step-by-step checklist */
+  // Safety net: what a month of "life goes on" costs = needs% of needs + wants% of wants
+  function efPlan() {
+    const E = state.efund || { needsPct: 100, wantsPct: 75 };
+    const np = Math.max(0, Math.min(200, num(E.needsPct))), wp = Math.max(0, Math.min(200, num(E.wantsPct)));
+    let needs = state.categories.filter((c) => c.group === "need").reduce((a, c) => a + num(c.budget), 0);
+    let wants = state.categories.filter((c) => c.group === "want").reduce((a, c) => a + num(c.budget), 0);
+    let source = "budgets";
+    if (needs + wants <= 0) { // no budgets yet: use the average of the last 3 months of spending
+      const months = [1, 2, 3].map((i) => monthStats(shiftMonth(thisMonth(), -i)));
+      const avg = (grp) => months.reduce((a, m) => a + state.categories.filter((c) => c.group === grp).reduce((x, c) => x + (m.byCat[c.id] || 0), 0), 0) / 3;
+      needs = avg("need"); wants = avg("want"); source = needs + wants > 0 ? "spending" : "none";
+    }
+    const monthly = needs * np / 100 + wants * wp / 100;
+    const real = state.accounts.filter((a) => !a.example);
+    const efGoals = state.goals.filter((g) => !g.example && (g.icon === "umbrella" || /emergenc|safety|rainy/i.test(g.name))).reduce((a, g) => a + num(g.saved), 0);
+    const savings = real.filter((a) => a.type === "savings").reduce((a, x) => a + num(x.balance), 0);
+    const saved = Math.max(efGoals, savings);
+    return { np, wp, needs, wants, monthly, saved, months: monthly > 0 ? saved / monthly : 0, source, fromGoal: efGoals >= savings && efGoals > 0 };
+  }
+  function efundCard(compact) {
+    const P = efPlan();
+    const pctBox = (key, val) => '<span class="money-in pct-in"><input type="number" min="0" max="200" step="5" value="' + val + '" data-change="efPct" data-k="' + key + '" aria-label="Percent"></span>';
+    if (P.source === "none") return '<div class="card stack ef-card"><h2>🛟 Your safety net</h2><p class="small">Penny works this out from your budgets. Add your monthly <b>needs</b> (rent, groceries, bills) and <b>wants</b> on <a href="#budgets">Budget Trough</a> and this fills in.</p></div>';
+    const rows = [[3, "3 months"], [6, "6 months"], [12, "1 year"]].map(([n, label]) => {
+      const target = P.monthly * n, pct = target ? Math.min(1, P.saved / target) : 0, done = P.saved >= target && target > 0;
+      return '<div class="ef-row"><div class="row between small"><b>' + (done ? "✅ " : "") + label + "</b><span>" + money(target) + (done ? "" : ' <span class="muted">· ' + money(Math.max(0, target - P.saved)) + " to go</span>") + "</span></div>" + bar(pct, true) +
+        '<button class="btn ' + (done ? "ghost" : "soft") + ' sm" data-act="efGoal" data-n="' + n + '">' + (state.goals.some((g) => !g.example && /emergenc/i.test(g.name)) ? "Set my goal to " : "Make a goal for ") + label + "</button></div>";
+    }).join("");
+    return '<div class="card stack ef-card"><div class="card-head"><h2>🛟 Your safety net</h2>' + (P.saved > 0 ? '<span class="pill save">Lasts about ' + (P.months >= 10 ? Math.round(P.months) : P.months.toFixed(1)) + " months</span>" : "") + "</div>" +
+      '<p class="small">If your income stopped, a month of life would cost about <b>' + money(P.monthly) + "</b>.</p>" +
+      '<div class="ef-mix small"><span>' + pctBox("needsPct", P.np) + "% of needs <b>" + money(P.needs) + '</b></span><span class="muted">+</span><span>' + pctBox("wantsPct", P.wp) + "% of wants <b>" + money(P.wants) + "</b></span></div>" +
+      (P.source === "spending" ? '<p class="tiny muted">You haven\'t set budgets yet, so Penny used your average spending from the last 3 months.</p>' : "") +
+      (compact ? "" : '<p class="tiny muted">Needs are things you can\'t skip. Penny counts 75% of wants because you\'d likely cut back a little in a tough month. Change either percent to suit you.</p>') +
+      '<div class="ef-rows">' + rows + "</div>" +
+      '<p class="small">' + (P.saved > 0 ? "You have <b>" + money(P.saved) + "</b> set aside (" + (P.fromGoal ? "your emergency fund goal" : "your savings accounts") + "). That would last about <b>" + (P.months >= 10 ? Math.round(P.months) : P.months.toFixed(1)) + " months</b>." : "Nothing set aside yet. Add a savings account on The Pig Picture, or make a goal below.") + "</p></div>";
+  }
   function pathHelpers() {
     const real = state.accounts.filter((a) => !a.example);
     const needs = state.categories.filter((c) => c.group === "need").reduce((a, c) => a + num(c.budget), 0);
     const efGoals = state.goals.filter((g) => !g.example && (g.icon === "umbrella" || /emergenc|safety|rainy/i.test(g.name))).reduce((a, g) => a + num(g.saved), 0);
     const savings = real.filter((a) => a.type === "savings").reduce((a, x) => a + num(x.balance), 0);
     return {
-      needs, emergency: Math.max(efGoals, savings),
+      needs, emergency: Math.max(efGoals, savings), efMonthly: efPlan().monthly,
       highDebt: real.filter((a) => a.type === "cc" || a.type === "loc").reduce((a, x) => a + num(x.balance), 0),
       debtsListed: real.filter((a) => acctType(a.type).kind === "debt").length,
       realTx: state.transactions.filter((t) => !t.example).length,
@@ -1492,7 +1529,7 @@
     return '<div class="stop ' + cls + '"><div class="node" style="--c:' + step.color + '">' + (st.done && !st.skipped ? "✅" : step.emoji) + "</div>" +
       '<div class="card stop-card"><div class="row between" style="gap:8px"><span class="label">Step ' + (i + 1) + "</span>" + pill + "</div>" +
       "<h3 style=\"margin-top:4px\">" + esc(step.title) + '</h3><p class="small muted">' + esc(step.short) + "</p>" +
-      '<details data-step="' + step.id + '"' + (open ? " open" : "") + '><summary class="small"><b>' + (st.done ? "See the checklist" : "What to do") + "</b></summary>" +
+      '<details data-step="' + step.id + '"' + (open ? " open" : "") + '><summary class="small"><b>' + (st.done ? "See the checklist" : "What to do") + "</b></summary>" + (step.id === "full" ? efundCard(true) : "") +
       '<div class="stack" style="margin-top:10px;gap:0">' + items.map((it) => {
         const s = itemState(step, it, pathHelpers()), k = pathKey(step.id, it.id);
         return '<div class="chk' + (s.done ? " on" : "") + '"><input type="checkbox" id="pi-' + esc(k) + '" data-change="pathItem" data-k="' + esc(k) + '"' + (s.done ? " checked" : "") + (s.auto ? " disabled" : "") + '>' +
@@ -2703,7 +2740,7 @@
         (take > 0 ? '<p class="small muted" style="margin-bottom:12px">Based on take-home pay of about <b>' + money(take) + "</b> a month" + (state.tax.income > 0 ? " (from your Taxes page)" : "") + ".</p><div class=\"stack\">" +
           rule.map(([g, name, share, col]) => { const target = take * share, have = b[g]; return '<div><div class="row between small" style="margin-bottom:5px"><span><b style="color:' + col + '">' + name + '</b> <span class="muted">aim for ' + share * 100 + '%</span></span><span class="num">' + money(have) + ' <span class="muted">/ ' + money(target) + "</span></span></div>" + bar(have / (target || 1), g === "save") + "</div>"; }).join("") +
           "</div>" + '<p class="small muted" style="margin-top:12px">' + (b.need + b.want + b.save > take ? "Your plan is " + money(b.need + b.want + b.save - take) + " more than you bring home. No worries, trimming one want category usually fixes it." : money(take - b.need - b.want - b.save) + " a month has no job yet. Give it one! A goal is a great home for it 🎯") + "</p>"
-          : '<p class="muted">Add your income on the <a href="#taxes">Taxes page</a> and this fills in.</p>') + "</div></div>" +
+          : '<p class="muted">Add your income on the <a href="#taxes">Taxes page</a> and this fills in.</p>') + "</div></div>" + efundCard(false) +
         groups.map(([g, name, sub]) => {
           const cats = state.categories.filter((c) => c.group === g);
           return '<div><div class="row between" style="margin:6px 0 10px"><div><h2>' + name + '</h2><p class="small muted">' + sub + '</p></div><div class="row" style="gap:8px"><span class="pill ' + g + '">' + money(b[g]) + ' / month</span><button class="btn soft sm" data-act="editCat" data-group="' + g + '">' + icon("plus") + " Add to " + name + "</button></div></div>" +
@@ -3242,6 +3279,13 @@
      Button actions
      ================================================================== */
   const ACT = {
+    efGoal(el) {
+      const n = +el.dataset.n, P = efPlan(), target = Math.ceil(P.monthly * n / 50) * 50; if (!target) return toast("Add your budgets first so Penny knows your monthly needs");
+      let g = state.goals.find((x) => !x.example && /emergenc/i.test(x.name));
+      if (g) { g.target = target; toast("🛟 Emergency fund goal set to " + money(target) + " (" + (n === 12 ? "1 year" : n + " months") + ")"); }
+      else { g = { id: uid(), name: "Emergency fund", icon: "umbrella", theme: 4, target, saved: Math.min(P.saved, target), date: toISO(addMonths(today(), n === 12 ? 24 : n * 3)), account: "HISA", photo: null, history: [] }; state.goals.push(g); toast("🛟 Made your Emergency fund goal: " + money(target)); }
+      commit();
+    },
     txScope(el) { state.ui.txAll = el.dataset.v === "all"; txLimit = 300; save(); window.scrollTo(0, 0); lastPage = null; render(); },
     txMore() { txLimit += 300; render(); },
     selToggle() { selMode = !selMode; selIds.clear(); render(); },
@@ -3582,6 +3626,7 @@
      Dropdowns, checkboxes and file inputs
      ================================================================== */
   const CHG = {
+    efPct(el) { state.efund = state.efund || { needsPct: 100, wantsPct: 75 }; state.efund[el.dataset.k] = Math.max(0, Math.min(200, num(el.value))); commit(); },
     txPick(el) { if (el.checked) selIds.add(el.dataset.id); else selIds.delete(el.dataset.id); render(); },
     selAll(el) { (window.__lastShown || []).forEach((id) => { if (el.checked) selIds.add(id); else selIds.delete(id); }); render(); },
     balApply(el) { const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (b) b.apply = el.checked; },
