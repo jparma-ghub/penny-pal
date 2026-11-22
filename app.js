@@ -1794,7 +1794,7 @@
   const SC = C.sync || {};
   const syncReady = () => !!(SC.url && SC.anonKey) && !inFrame();
   let sync = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) { return {}; } })();
-  let syncState = "idle", syncNote = "", syncTimer = null, syncBusy = false, applyingRemote = false, lastPushed = null;
+  let syncState = "idle", syncNote = "", syncTimer = null, syncBusy = false, applyingRemote = false, lastPushed = null, booting = true;
   const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch (e) { /* ignore */ } };
   const signedIn = () => syncReady() && !!sync.refresh;
   async function sb(path, opts, auth) {
@@ -1818,7 +1818,7 @@
     catch (e) { if (e.status === 400 || e.status === 401) { syncSignOut(true); e.message = "signed_out"; } throw e; }
   }
   function syncSignOut(expired) {
-    sync = { email: sync.email }; saveSync(); syncState = "idle"; lastPushed = null;
+    sync = { email: sync.email }; saveSync(); syncState = "idle"; lastPushed = null; try { localStorage.removeItem(BASE_KEY); } catch (e) { /* ignore */ }
     syncNote = expired ? "You were signed out. Sign in again to keep syncing." : "";
     if (pageId() === "mydata") render();
   }
@@ -1851,11 +1851,45 @@
     return row;
   };
   function shareable() { const copy = JSON.parse(JSON.stringify(state)); if (copy.ui) delete copy.ui.weather; return copy; }
+  /* Merging: when both devices changed things since they last agreed ("base"), keep both sets of changes.
+     Lists are matched item by item (by id), so an add on one device and an edit on the other both survive.
+     Only when the very same thing changed on both does this device's newer edit win. */
+  const BASE_KEY = "pennyPal.syncBase";
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function itemKey(x) { if (x === null || typeof x !== "object") return "v:" + JSON.stringify(x); if (x.id !== undefined) return "id:" + x.id; if (x.match !== undefined) return "rule:" + x.match + "|" + x.cat; if (x.ym !== undefined) return "ym:" + x.ym; if (x.date !== undefined && x.score !== undefined) return "cr:" + x.date; return "j:" + JSON.stringify(x); }
+  function mergeList(b, l, r) {
+    b = Array.isArray(b) ? b : []; const B = new Map(b.map((x) => [itemKey(x), x])), L = new Map(l.map((x) => [itemKey(x), x])), R = new Map(r.map((x) => [itemKey(x), x]));
+    const out = [], seen = new Set();
+    const take = (k) => {
+      if (seen.has(k)) return; seen.add(k);
+      const inB = B.has(k), inL = L.has(k), inR = R.has(k);
+      if (inL && inR) out.push(mergeVal(B.get(k), L.get(k), R.get(k)));
+      else if (inL && !inR) { if (!inB || !same(L.get(k), B.get(k))) out.push(L.get(k)); }        // added here, or deleted there but edited here
+      else if (inR && !inL) { if (!inB || !same(R.get(k), B.get(k))) out.push(R.get(k)); }        // added there, or deleted here but edited there
+    };
+    r.forEach((x) => take(itemKey(x))); l.forEach((x) => take(itemKey(x)));
+    return out;
+  }
+  function mergeVal(b, l, r) {
+    if (same(l, r)) return l;
+    if (b !== undefined && same(l, b)) return r;
+    if (b !== undefined && same(r, b)) return l;
+    if (Array.isArray(l) && Array.isArray(r)) return mergeList(b, l, r);
+    if (l && r && typeof l === "object" && typeof r === "object") { const o = {}, bb = b && typeof b === "object" ? b : {}; new Set(Object.keys(l).concat(Object.keys(r))).forEach((k) => { const v = k in l ? (k in r ? mergeVal(bb[k], l[k], r[k]) : (k in bb && same(l[k], bb[k]) ? undefined : l[k])) : (k in bb && same(r[k], bb[k]) ? undefined : r[k]); if (v !== undefined) o[k] = v; }); return o; }
+    return l; // the very same thing changed on both: this device's newer edit wins
+  }
+  function saveBase(data) { try { localStorage.setItem(BASE_KEY, JSON.stringify(data)); } catch (e) { try { localStorage.removeItem(BASE_KEY); } catch (e2) { /* ignore */ } } }
+  function loadBase() { try { return JSON.parse(localStorage.getItem(BASE_KEY) || "null"); } catch (e) { return null; } }
+  // What counts as a real change worth syncing: not which page you looked at, what month you're viewing or your search box
+  function syncSig() {
+    const c = shareable(); delete c.ui; if (c.flags) delete c.flags.visits; delete c.dismissed;
+    return JSON.stringify(c);
+  }
   async function sbPush() {
     const data = shareable(), json = JSON.stringify(data), at = new Date().toISOString();
     if (!sync.key) throw new Error("need_key");
     await sb("/rest/v1/penny_data?on_conflict=user_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: sync.userId, data: await lockData(data), updated_at: at }) });
-    sync.seen = at; sync.dirty = false; saveSync(); lastPushed = json;
+    sync.seen = at; sync.dirty = false; saveSync(); lastPushed = syncSig(); saveBase(data);
   }
   const SNAP_KEY = "pennyPal.beforeSync";
   function snapshotBeforeSync() {
@@ -1873,14 +1907,14 @@
     applyingRemote = true;
     try { state = normalize(row.data); if (keepWeather) state.ui.weather = keepWeather; checkIn(); applyTheme(); evaluate(); save(); }
     finally { applyingRemote = false; }
-    sync.seen = row.updated_at; sync.dirty = false; saveSync(); lastPushed = JSON.stringify(shareable());
-    if (!$("#wizard")) render();
+    sync.seen = row.updated_at; sync.dirty = false; saveSync(); lastPushed = syncSig(); saveBase(row.data);
+    quietRender();
     if (!quiet) toast("☁️ Updated with your latest changes from your other device");
   }
   function syncChanged() {
-    if (applyingRemote || !signedIn()) return;
+    if (applyingRemote || booting || !signedIn()) return; // opening the app (daily check-in, page visit) isn't an edit
     if (state.isExample) return; // example data stays on this device
-    if (lastPushed !== null && JSON.stringify(shareable()) === lastPushed) return;
+    if (lastPushed !== null && syncSig() === lastPushed) return; // only real changes count (not page visits or screen settings)
     sync.dirty = true; sync.editedAt = Date.now(); saveSync();
     clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 2500);
   }
@@ -1900,9 +1934,19 @@
         // someone else (your other device) saved since we last looked
         const theirs = Date.parse(row.updated_at) || 0;
         if (theirsW === 0 && mine > 0) { await sbPush(); pushed = true; } // never let an empty save wipe this device
-        else if (mine >= 4 && theirsW < mine * 0.5) { askWhichToKeep(row); syncBusy = false; return; } // the other device has much less: ask first
-        else if (!sync.dirty || theirs > (sync.editedAt || 0)) applyRemote(row);
-        else { await sbPush(); pushed = true; }
+        else if (mine >= 4 && theirsW < mine * 0.5) { askWhichToKeep(row); syncBusy = false; return; } // the other device has much less: always ask first
+        else if (!sync.dirty) applyRemote(row);
+        else {
+          // both devices changed things: combine them instead of picking one
+          const base = loadBase();
+          if (base) {
+            const merged = mergeVal(base, shareable(), row.data);
+            applyRemote({ data: merged, updated_at: row.updated_at }, true);
+            await sbPush(); pushed = true;
+            if (!same(merged, row.data)) toast("☁️ Combined your changes from both devices");
+          } else if (theirs > (sync.editedAt || 0)) applyRemote(row);
+          else { await sbPush(); pushed = true; }
+        }
       } else if (sync.dirty || !row) {
         if (!state.isExample && !(mine === 0 && theirsW > 0)) { await sbPush(); pushed = true; }
       }
@@ -1914,7 +1958,7 @@
       syncState = e.message === "signed_out" ? "idle" : e.message === "wrong_key" || e.message === "need_key" ? "needkey" : "error";
       syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : /permission denied|42501|row-level security/i.test(e.message + " " + (e.code || "")) ? "Sync isn't fully switched on at the server yet (database permissions). Your data is safe on this device and will sync once it's fixed. (Details for the app owner: " + String(e.message).slice(0, 140) + ")" : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
       if (manual) toast(esc(syncNote || "Couldn't sync right now"));
-    } finally { syncBusy = false; if (pageId() === "mydata") render(); }
+    } finally { syncBusy = false; if (pageId() === "mydata") quietRender(); }
   }
   // How much real stuff is in a profile? Used so an empty device can never wipe out real data.
   function dataWeight(d) {
@@ -1943,7 +1987,7 @@
     const local = state, localHas = !local.isExample && (local.transactions.length || local.goals.length || local.profile.name || (local.tax && local.tax.income));
     if (!row) { sync.seen = null; if (!local.isExample) { await sbPush(); toast("☁️ Your data is now saved to your account"); } return; }
     if (!localHas || dataWeight(state) === 0) { applyRemote(row, true); toast("☁️ Brought over " + esc(whatCameOver(state)) + " from your account"); return; }
-    if (JSON.stringify(row.data) === JSON.stringify(shareable())) { sync.seen = row.updated_at; saveSync(); return; }
+    if (JSON.stringify(row.data) === JSON.stringify(shareable())) { sync.seen = row.updated_at; saveSync(); saveBase(row.data); return; }
     const r = row.data || {}, n = (x) => (x && x.length) || 0;
     window.__syncChoice = row;
     openModal('<div class="stack"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(90, "P", "thinking") : "") + '<div><h2>Which data should Penny keep?</h2><p class="small muted">This device and your account both have data. Pick one. The other one gets replaced.</p></div></div>' +
@@ -2080,7 +2124,9 @@
       "<li>Download a backup once in a while as an extra safety net.</li></ul></details></div>";
   }
   function startSync() {
+    booting = false;
     if (!syncReady()) return;
+    if (!sync.dirty) lastPushed = syncSig(); // what's here now matches what was last synced
     if (signedIn()) syncNow();
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(); else if (sync.dirty) syncNow(); });
     window.addEventListener("online", () => syncNow());
@@ -2976,13 +3022,30 @@
     $("#mobileNav").innerHTML = navHTML("mobile");
     renderTop();
     if (!state.isExample) coverBills(); // budgets always include the bills you've entered
+    // redrawing the same page keeps your place: scroll position, open sections, scrolled lists
+    const samePage = lastPage === id, view = $("#view");
+    const keep = samePage ? { y: window.scrollY, open: Array.from(view.querySelectorAll("details")).map((d) => d.open), boxes: Array.from(view.querySelectorAll(".table-wrap, .import-table")).map((t) => t.scrollTop) } : null;
     pageSrcs = new Set();
-    try { $("#view").innerHTML = page.render(); if (page.after) page.after(); } finally { pageSrcs = null; }
+    try { view.innerHTML = page.render(); if (page.after) page.after(); } finally { pageSrcs = null; }
+    if (keep) {
+      view.querySelectorAll("details").forEach((d, i) => { if (keep.open[i] !== undefined) d.open = keep.open[i]; });
+      view.querySelectorAll(".table-wrap, .import-table").forEach((t, i) => { if (keep.boxes[i]) t.scrollTop = keep.boxes[i]; });
+      if (Math.abs(window.scrollY - keep.y) > 1) window.scrollTo(0, keep.y);
+    }
     if (lastPage !== id) { window.scrollTo(0, 0); const on = $("#mobileNav .on"); if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "center" }); }
     if (lastPage !== id) maybePageIntro(id);
     lastPage = id;
   }
   function commit(msg) { evaluate(); save(); render(); if (msg) toast(msg); }
+  // For updates that arrive on their own (sync): wait if you're typing or have a window open
+  let renderLater = false;
+  function quietRender() {
+    const a = document.activeElement;
+    const typing = a && a.closest && a.closest("#view") && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+    if (typing || modalEl || $("#wizard")) { renderLater = true; return; }
+    render();
+  }
+  document.addEventListener("focusout", () => { if (!renderLater) return; setTimeout(() => { const a = document.activeElement; if (renderLater && !(a && a.closest && a.closest("#view") && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) && !modalEl) { renderLater = false; render(); } }, 120); });
   function snapshotNet() {
     const ym = thisMonth(), net = state.accounts.reduce((a, x) => a + (acctType(x.type).kind === "debt" ? -num(x.balance) : num(x.balance)), 0);
     state.netHistory = state.netHistory.filter((h) => h.ym !== ym);
@@ -3356,7 +3419,11 @@
       if (d.learn && t.desc) { const words = t.desc.toUpperCase().replace(/[#*]?\d.*$/, "").trim().split(/\s+/).slice(0, 2).join(" "); if (words) state.rules.unshift({ match: words, cat: t.cat }); }
       state.ui.month = t.date.slice(0, 7); closeModal(); commit();
     },
-    addRule(f, d) { state.rules.unshift({ match: d.match.trim().toUpperCase(), cat: d.cat }); commit("Rule added"); },
+    addRule(f, d) {
+      const match = d.match.trim().toUpperCase(); if (!match) return;
+      state.rules.unshift({ match, cat: d.cat }); commit("Rule added: " + esc(match) + " → " + esc(catById(d.cat).name));
+      const box = $('form[data-form="addRule"]'); if (box) { const det = box.closest("details"); if (det) det.open = true; const sel = box.querySelector("select[name=cat]"); if (sel) sel.value = d.cat; const inp = box.querySelector("input[name=match]"); if (inp) inp.focus({ preventScroll: true }); }
+    },
     saveCat(f, d) {
       const c = { name: d.name.trim(), group: d.group, budget: Math.max(0, num(d.budget)), icon: d.icon, color: d.color, touched: true, touchedOn: todayISO() };
       if (d.id) Object.assign(state.categories.find((x) => x.id === d.id), c);
