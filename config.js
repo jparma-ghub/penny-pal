@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.5",
+  version: "3.6",
   whatsNew: [
+    "📺 Your bills and subscriptions now show up in your budget, in the right category",
+    "➕ Add a new category right inside Needs, Wants or Savings",
     "✍️ New profiles start empty: no made-up budgets, ages or home prices. Penny asks you for each number",
     "🏦 Setup now lets you add all your accounts, like chequing and more than one savings account",
     "🧹 Cleaned out leftover example data (like the Japan trip) from new accounts",

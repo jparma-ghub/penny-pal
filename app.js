@@ -365,6 +365,7 @@
   }
   function evaluate() {
     const p = state.profile;
+    if (!state.isExample) coverBills();
     try { evalFeed(); } catch (e) { /* never let Penny's belly break the app */ }
     evalWeekly();
     evalPath();
@@ -398,6 +399,25 @@
     let goalIn = 0;
     for (const g of state.goals) for (const h of g.history || []) if (h.date.startsWith(ym)) goalIn += +h.amount;
     return { tx, byCat, income, spent, saved: savedTx + goalIn, savedTx, goalIn };
+  }
+  // Which budget category a bill belongs to (phone bills to Phone & internet, gym to Health and so on)
+  function billCat(sub) {
+    if (sub.cat && state.categories.some((c) => c.id === sub.cat)) return sub.cat;
+    const n = String(sub.name || "") + " " + String(sub.icon || "");
+    const guess = /rogers|bell|telus|fido|koodo|freedom|virgin|public mobile|chatr|phone|mobile|wireless|internet|wifi|smartphone/i.test(n) ? "phone" :
+      /insur|policy|shield/i.test(n) ? "insurance" : /hydro|enbridge|electric|water|utilit|zap|droplet/i.test(n) ? "utilities" :
+      /rent|landlord|mortgage/i.test(n) ? "rent" : /goodlife|gym|fit|yoga|dumbbell|physio|dental|pharm/i.test(n) ? "health" : /presto|ttc|transit|parking/i.test(n) ? "transit" : "subs";
+    return state.categories.some((c) => c.id === guess) ? guess : state.categories.some((c) => c.id === "subs") ? "subs" : "other";
+  }
+  function billsFor(catId) { return state.subs.filter((x) => x.status !== "cancelled" && billCat(x) === catId); }
+  function billsMonthly(catId) { return billsFor(catId).reduce((a, x) => a + monthlyCost(x), 0); }
+  // A category's plan always covers the bills in it, so the budget matches what you entered in Bills
+  function coverBills() {
+    for (const c of state.categories) {
+      if (c.group === "income") continue;
+      const need = Math.ceil(billsMonthly(c.id));
+      if (need > (+c.budget || 0)) { c.budget = need; c.fromBills = true; }
+    }
   }
   function budgetTotals() {
     const g = { need: 0, want: 0, save: 0 };
@@ -874,8 +894,10 @@
     }
     const subsYear = state.subs.filter((s) => s.status !== "cancelled").reduce((a, s) => a + monthlyCost(s), 0) * 12;
     if (subsYear > 0) tips.push(["", "repeat", "Your subscriptions cost <b>" + money(subsYear) + " a year</b>. Cancel one you don't use for an easy 100 XP."]);
+    if (state.tax.income > 0 && !(state.tax.withheldPerPay > 0)) tips.push(["gold", "landmark", "Add the <b>tax taken off each paycheque</b> on the <a href=\"#taxes\">Taxes page</a> (it's on your pay stub), and Penny can tell you if you're getting a refund."]);
     if (state.tax.income > 0) {
-      if (t.refund > 1500) tips.push(["gold", "hand-coins", "You're on track for a <b>" + money(t.refund) + " refund</b>. That's " + money(t.refund / t.periods) + " per paycheque you could have now. Ask HR about form T1213."]);
+      if (!(state.tax.withheldPerPay > 0)) { /* no refund guesses until we know what was taken off */ }
+      else if (t.refund > 1500) tips.push(["gold", "hand-coins", "You're on track for a <b>" + money(t.refund) + " refund</b>. That's " + money(t.refund / t.periods) + " per paycheque you could have now. Ask HR about form T1213."]);
       else if (t.refund < -500) tips.push(["red", "landmark", "You might <b>owe about " + money(-t.refund) + "</b> in April. Good news: you have time to fix it. An RRSP contribution of about " + money(-t.refund / Math.max(0.2, t.marginal)) + " would roughly cover it."]);
       tips.push(["", "sunset", "Every <b>$1,000</b> you put in your RRSP or FHSA gets you about <b>" + money(t.per1k) + "</b> back at tax time."]);
     }
@@ -2118,11 +2140,12 @@
           : '<p class="muted">Add your income on the <a href="#taxes">Taxes page</a> and this fills in.</p>') + "</div></div>" +
         groups.map(([g, name, sub]) => {
           const cats = state.categories.filter((c) => c.group === g);
-          return '<div><div class="row between" style="margin:6px 0 10px"><div><h2>' + name + '</h2><p class="small muted">' + sub + '</p></div><span class="pill ' + g + '">' + money(b[g]) + " / month</span></div>" +
+          return '<div><div class="row between" style="margin:6px 0 10px"><div><h2>' + name + '</h2><p class="small muted">' + sub + '</p></div><div class="row" style="gap:8px"><span class="pill ' + g + '">' + money(b[g]) + ' / month</span><button class="btn soft sm" data-act="editCat" data-group="' + g + '">' + icon("plus") + " Add to " + name + "</button></div></div>" +
             '<div class="grid g3">' + cats.map((c) => {
               const sp = m.byCat[c.id] || 0, p = c.budget ? sp / c.budget : sp ? 1.01 : 0, left = c.budget - sp;
               return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : !c.budget ? (sp ? "Spent " + money(sp) + ", no budget yet" : "No budget yet") : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div></div>" +
                 '<button class="iconbtn" data-act="editCat" data-id="' + c.id + '" title="Edit category">' + icon("pencil") + "</button></div>" + bar(p, g === "save") +
+                (billsFor(c.id).length ? '<div class="tiny muted bills-in">📺 Bills: ' + billsFor(c.id).map((x) => esc(x.name) + " " + money2(monthlyCost(x))).join(", ") + (billsFor(c.id).length > 1 ? " = " + money2(billsMonthly(c.id)) : "") + " a month</div>" : "") +
                 '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || "") + '" placeholder="0" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div></div>';
             }).join("") + "</div></div>";
         }).join("") +
@@ -2497,6 +2520,7 @@
     $("#sideNav").innerHTML = navHTML("side");
     $("#mobileNav").innerHTML = navHTML("mobile");
     renderTop();
+    if (!state.isExample) coverBills(); // budgets always include the bills you've entered
     pageSrcs = new Set();
     try { $("#view").innerHTML = page.render(); if (page.after) page.after(); } finally { pageSrcs = null; }
     if (lastPage !== id) { window.scrollTo(0, 0); const on = $("#mobileNav .on"); if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "center" }); }
@@ -2590,8 +2614,8 @@
     if (!cats.some((c) => c.id === sel)) sel = cats[0] && cats[0].id;
     return cats.map((c) => '<label><input type="radio" name="cat" value="' + c.id + '"' + (c.id === sel ? " checked" : "") + '><span style="color:' + c.color + '">' + icon(c.icon) + "</span>" + esc(c.name) + "</label>").join("");
   }
-  function catModal(c) {
-    const isNew = !c; c = c || { id: "", name: "", icon: "sparkles", color: C.swatches[0], group: "want", budget: 0 };
+  function catModal(c, group) {
+    const isNew = !c; c = c || { id: "", name: "", icon: "sparkles", color: C.swatches[0], group: group || "want", budget: 0 };
     openModal('<form data-form="saveCat" class="stack"><input type="hidden" name="id" value="' + esc(c.id) + '"><h2>' + (isNew ? "New category" : "Edit category") + "</h2>" +
       '<div class="fgrid">' + field("Name", '<input name="name" required value="' + esc(c.name) + '">') + field("Type", '<select name="group">' + Object.entries(GROUPS).map(([k, v]) => '<option value="' + k + '"' + (c.group === k ? " selected" : "") + ">" + v + "</option>").join("") + "</select>") + field("Monthly budget", moneyInput('name="budget" min="0" value="' + num(c.budget) + '"')) + "</div>" +
       '<input type="hidden" name="icon" value="' + esc(c.icon) + '"><input type="hidden" name="color" value="' + esc(c.color) + '">' +
@@ -2604,7 +2628,8 @@
     openModal('<form data-form="saveSub" class="stack"><input type="hidden" name="id" value="' + esc(s.id || "") + '"><h2>' + (isNew ? "Add a bill or subscription" : "Edit") + "</h2>" +
       '<div class="fgrid">' + field("Name", '<input name="name" required value="' + esc(s.name) + '" placeholder="e.g. Crave">') + field("Amount", moneyInput('name="amount" min="0" required value="' + esc(s.amount) + '"')) +
       field("How often", '<select name="cycle">' + Object.entries(CYCLES).map(([k, v]) => '<option value="' + k + '"' + (s.cycle === k ? " selected" : "") + ">" + v[0] + "</option>").join("") + "</select>") +
-      field("Next charge", '<input type="date" name="next" value="' + esc(s.next) + '">') + "</div>" +
+      field("Next charge", '<input type="date" name="next" value="' + esc(s.next) + '">') +
+      field("Budget category", '<select name="cat">' + state.categories.filter((c) => c.group === "need" || c.group === "want").map((c) => '<option value="' + c.id + '"' + (billCat(s) === c.id ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</select>", "Penny adds it to this budget") + "</div>" +
       '<input type="hidden" name="icon" value="' + esc(s.icon) + '"><div><div class="label" style="margin-bottom:6px">Icon</div><div class="icon-grid" style="max-height:130px">' + ["repeat", "film", "tv", "music", "smartphone", "wifi", "zap", "droplet", "dumbbell", "shopping-bag", "car", "shield", "house", "cloud", "gamepad-2", "book", "newspaper", "credit-card", "heart-pulse", "graduation-cap"].filter((k) => ICONS[k]).map((k) => '<button type="button" data-act="pickIcon" data-v="' + k + '" class="' + (k === s.icon ? "on" : "") + '">' + icon(k) + "</button>").join("") + "</div></div>" +
       '<div class="row"><button class="btn">' + icon("check") + ' Save</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>');
   }
@@ -2706,7 +2731,7 @@
       pendingImport = null; award(Math.min(100, rows.length * 2), "Imported " + rows.length + " transactions"); commit();
     },
     delRule(el) { state.rules.splice(+el.dataset.i, 1); commit("Rule removed"); },
-    editCat(el) { catModal(el.dataset.id ? state.categories.find((c) => c.id === el.dataset.id) : null); },
+    editCat(el) { catModal(el.dataset.id ? state.categories.find((c) => c.id === el.dataset.id) : null, el.dataset.group); },
     delCat(el) {
       if (state.categories.filter((c) => c.group === "income").length <= 1 && catById(el.dataset.id).group === "income") { toast("Keep at least one income category"); return; }
       state.categories = state.categories.filter((c) => c.id !== el.dataset.id);
@@ -2844,7 +2869,7 @@
       closeModal(); commit("Saved");
     },
     saveSub(f, d) {
-      const s = { name: d.name.trim(), amount: Math.abs(num(d.amount)), cycle: d.cycle, next: d.next || todayISO(), icon: d.icon };
+      const s = { name: d.name.trim(), amount: Math.abs(num(d.amount)), cycle: d.cycle, next: d.next || todayISO(), icon: d.icon, cat: d.cat || undefined };
       s.reviewed = todayISO();
       if (d.id) Object.assign(state.subs.find((x) => x.id === d.id), s, { example: false });
       else state.subs.push(Object.assign({ id: uid(), status: "keep" }, s));
@@ -2903,7 +2928,7 @@
     txCat(el) { state.ui.cat = el.value; render(); },
     txCatInline(el) { const t = state.transactions.find((x) => x.id === el.dataset.id); t.cat = el.value; t.recatOn = todayISO(); commit("Moved to " + catById(el.value).name); },
     txKind(el) { const pick = $("#catPick"); if (pick) pick.innerHTML = catPick(el.value, null); },
-    catBudget(el) { const c = state.categories.find((x) => x.id === el.dataset.id); c.budget = Math.max(0, num(el.value)); c.touched = true; c.touchedOn = todayISO(); commit(); },
+    catBudget(el) { const c = state.categories.find((x) => x.id === el.dataset.id); const floor = Math.ceil(billsMonthly(c.id)); c.budget = Math.max(0, num(el.value)); if (c.budget < floor) { c.budget = floor; toast("Your bills in " + esc(c.name) + " already add up to " + money(floor) + " a month, so the budget can't go lower"); } c.touched = true; c.touchedOn = todayISO(); commit(); },
     subStatus(el) {
       const s = state.subs.find((x) => x.id === el.dataset.id); s.status = el.value; s.reviewed = todayISO(); s.example = false;
       if (el.value === "cancelled") { s.cancelledOn = todayISO(); commit(); celebrate("cancel", { sub: "That's " + money(monthlyCost(s) * 12) + " a year back in your pocket." }); }
@@ -2989,11 +3014,14 @@
       e.preventDefault(); const fn = FORM[f.dataset.form]; if (fn) fn(f, formData(f), e);
     });
     document.addEventListener("change", (e) => {
+      if (e.target.name === "cat" && e.target.closest && e.target.closest('form[data-form="saveSub"]')) e.target.dataset.picked = "1";
       const el = e.target.closest("[data-change]"); if (el && CHG[el.dataset.change]) CHG[el.dataset.change](el, e);
     });
     let searchTimer;
     document.addEventListener("input", (e) => {
       const el = e.target;
+      // bill form: pick the budget category from the name as you type (until you choose one yourself)
+      if (el.name === "name" && el.closest && el.closest('form[data-form="saveSub"]')) { const sel = el.form.querySelector("select[name=cat]"); if (sel && !sel.dataset.picked) sel.value = billCat({ name: el.value }); }
       if (el.dataset && el.dataset.change === "txSearch") { clearTimeout(searchTimer); searchTimer = setTimeout(() => CHG.txSearch(el), 250); return; }
       const path = el.dataset && el.dataset.bind; if (!path) return;
       const [a, b] = path.split(".");
