@@ -30,10 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and REPLACE whatsNew with only that update's changes.
   // People who already use the app see a "What's new" popup once. Keep it short.
-  version: "5.0",
+  version: "5.1",
   whatsNew: [
-    "🔍 Uploaded something twice? Penny now flags possible duplicates and leaves them unticked. If one is really a new purchase, tick it to keep it",
-    "🔁 E-transfers to a person (even one with your name) stay as normal spending. Interbank transfer is only for clear transfers and credit card payments",
+    "📱 Screenshots read much better: Penny now uses the thin gray lines between transactions, so a long name on two lines stays one transaction",
+    "🖼️ Upload a few overlapping screenshots at once. Rows that show up in more than one are flagged as duplicates",
   ],
   locale: "en-CA",
   currency: "CAD",

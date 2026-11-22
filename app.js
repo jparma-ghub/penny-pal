@@ -1633,6 +1633,36 @@
       return imageToJpeg(out, max);
     }
   }
+  /* The thin gray lines a banking app draws between transactions. A pixel row counts as a
+     divider when most of it is a touch darker (or, in dark mode, lighter) than a few pixels
+     above and below. Text rows never cover that much of the width. */
+  function findDividers(blob) {
+    return new Promise((res) => {
+      const url = URL.createObjectURL(blob), img = new Image();
+      img.onload = () => {
+        try {
+          const w = img.width, h = img.height, cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+          const ctx = cv.getContext("2d", { willReadFrequently: true }); ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url);
+          const d = ctx.getImageData(0, 0, w, h).data, lum = (x, y) => { const i = (y * w + x) * 4; return 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]; };
+          const step = Math.max(1, Math.round(w / 300)), off = Math.max(2, Math.round(h / 800)), x0 = Math.round(w * 0.08), x1 = Math.round(w * 0.92);
+          let n = 0; for (let x = x0; x < x1; x += step) n++;
+          const hits = [];
+          for (let y = off; y < h - off; y++) {
+            let c = 0;
+            for (let x = x0; x < x1; x += step) {
+              const v = lum(x, y), a = lum(x, y - off), b = lum(x, y + off);
+              if ((v > 140 && v < a - 3 && v < b - 3) || (v < 110 && v > a + 3 && v > b + 3)) c++;
+            }
+            if (c > n * 0.55) hits.push(y);
+          }
+          const lines = []; hits.forEach((y) => { if (lines.length && y - lines[lines.length - 1] <= off + 2) lines[lines.length - 1] = y; else lines.push(y); });
+          lines.w = w; lines.h = h; res(lines);
+        } catch (e) { res([]); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); res([]); };
+      img.src = url;
+    });
+  }
   function invertImage(blob) {
     return new Promise((res, rej) => {
       const url = URL.createObjectURL(blob), img = new Image();
@@ -1806,7 +1836,7 @@
       return null; // not allowed, unavailable or unreadable: fall back to reading it ourselves
     }
   }
-  async function ocrRead(blob, withLayout) {
+  async function ocrRead(blob, withLayout, dividers) {
     if (inFrame()) return null; // the online artifact blocks the downloads this needs
     await withTimeout(loadScript(LIBS.ocr), 20000, "ocr_unavailable");
     if (!window.Tesseract) return null;
@@ -1819,15 +1849,86 @@
     const w = await withTimeout(window.Tesseract.createWorker("eng"), 60000, "ocr_unavailable");
     try {
       const r = await withTimeout(w.recognize(blob), 90000, "ocr_timeout");
-      const lay = [layoutText(r.data)];
-      try { await w.setParameters({ tessedit_pageseg_mode: "3" }); const r3 = await withTimeout(w.recognize(blob), 90000, "ocr_timeout"); lay.unshift(layoutText(r3.data)); } catch (e) { /* the first read is still fine */ }
-      lastOcrLayout = lay.filter(Boolean);
+      const lay = [layoutText(r.data)], useBands = dividers && dividers.length >= 3, band = useBands ? [bandRows(r.data, dividers)] : [];
+      try { await w.setParameters({ tessedit_pageseg_mode: "3" }); const r3 = await withTimeout(w.recognize(blob), 90000, "ocr_timeout"); lay.unshift(layoutText(r3.data)); if (useBands) band.push(bandRows(r3.data, dividers)); } catch (e) { /* the first read is still fine */ }
+      if (useBands && dividers.h) {
+        const reads = band.filter(Boolean), n = Math.max(0, ...reads.map((r) => r.length)), extra = [];
+        for (let i = 0; i < n && i < 40; i++) {
+          const pick = pickBand(reads.map((r) => r[i]));
+          const hadWords = reads.some((r) => r[i] && !r[i].skip && !r[i].date && r[i].words);
+          if (!hadWords || (pick && (pick.date || pick.lines.length))) continue;
+          const top = i === 0 ? 0 : dividers[i - 1], bottom = i < dividers.length ? dividers[i] : dividers.h;
+          if (bottom - top < 12) continue;
+          try {
+            await w.setParameters({ tessedit_pageseg_mode: "6" });
+            const rr = await withTimeout(w.recognize(blob, { rectangle: { left: 0, top: Math.max(0, top + 2), width: dividers.w, height: bottom - top - 4 } }), 20000, "ocr_timeout");
+            const one = bandRows(rr.data, dividers); if (one && one[i]) { extra[i] = one[i]; }
+          } catch (e) { /* keep what we had */ }
+        }
+        if (extra.length) band.push(extra);
+      }
+      lastOcrLayout = lay.filter(Boolean); lastOcrBands = useBands ? [joinBands(band)].filter(Boolean) : [];
       return r && r.data && r.data.text ? r.data.text : null;
     } finally { try { await w.terminate(); } catch (e) { /* already gone */ } }
   }
   /* Rebuild rows from where each word sits on screen. Names that wrap onto two
      lines get joined, and an amount sitting between them gets attached. */
-  let lastOcrLayout = [];
+  let lastOcrLayout = [], lastOcrBands = [];
+  function ocrWords(data) {
+    let words = data.words;
+    if (!words || !words.length) { words = []; (data.blocks || []).forEach((b) => (b.paragraphs || []).forEach((p) => (p.lines || []).forEach((l) => (l.words || []).forEach((w) => words.push(w))))); }
+    return words.filter((w) => w && w.bbox && w.text && w.text.trim() && !/^[>›»<?=|—–-]+$/.test(w.text.trim()))
+      .map((w) => ({ t: w.text.trim().replace(/^[<‹«]+|[>›»]+$/g, ""), c: w.confidence == null ? 100 : w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0) }))
+      .filter((w) => w.t);
+  }
+  // Each space between two dividers, read as one transaction (or kept as separate lines when it holds a date heading)
+  function bandRows(data, dividers) {
+    try {
+      const words = ocrWords(data); if (words.length < 3) return null;
+      const edges = [-Infinity].concat(dividers, [Infinity]), out = [];
+      for (let i = 0; i < edges.length - 1; i++) {
+        const inBand = words.filter((w) => w.cy > edges[i] && w.cy < edges[i + 1]);
+        if (!inBand.length) { out.push(null); continue; }
+        const lines = [];
+        inBand.slice().sort((a, b) => a.cy - b.cy).forEach((w) => { const ln = lines.find((l) => Math.abs(l.cy - w.cy) < Math.min(l.h, w.h) * 0.5); if (ln) ln.w.push(w); else lines.push({ cy: w.cy, h: w.h, w: [w] }); });
+        lines.forEach((l) => { l.w.sort((a, b) => a.x0 - b.x0); l.s = l.w.map((w) => w.t).join(" "); const tw = l.w.filter((w) => !MONEY_WORD.test(w.t)); l.conf = tw.length ? tw.reduce((n, w) => n + w.c, 0) / tw.length : 100; });
+        // a row cut off at the edge of the screenshot reads as blurry letters: keep only the clear lines
+        const best = Math.max(...lines.map((l) => l.conf));
+        const keepLines = best >= 85 ? lines.filter((l) => l.conf >= Math.min(70, best - 20)) : lines;
+        const all = [].concat(...keepLines.map((l) => l.w));
+        const money = all.filter((w) => MONEY_WORD.test(w.t));
+        let text = all.filter((w) => !MONEY_WORD.test(w.t) && w.c >= 30);
+        // half-cut or blurry letters next to a clear name: drop the unsure bits
+        if (text.filter((w) => w.c >= 80).length >= 2) text = text.filter((w) => w.c >= 60);
+        const conf = text.length ? text.reduce((n, w) => n + w.c, 0) / text.length : 0;
+        // the menu bar at the bottom, with a row cut off and blurred behind it
+        if (/\bhome\b.*\b(accounts?|explore|more|rewards)\b/i.test(lines.map((l) => l.s).join(" "))) { out.push({ skip: true, lines: [], conf: 100 }); continue; }
+        const hasDate = lines.some((l) => lineDate(l.s.replace(/^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+/i, ""), 2000) || /^(today|yesterday)\b/i.test(l.s));
+        if (hasDate) { out.push({ lines: lines.map((l) => l.s), conf: 100, date: true }); continue; } // headings and page titles: line by line
+        // above the first divider is the phone's status bar and the app's header (or a row cut in half)
+        if (i === 0) { out.push({ lines: [], conf: 100, words: 0 }); continue; }
+        // no amount: a cut-off row or a title, not a transaction on its own
+        out.push({ lines: money.length && text.length ? [(text.map((w) => w.t).join(" ") + " " + money.map((w) => w.t).join(" ")).trim()] : [], conf, money: money.length > 0, words: text.length });
+      }
+      return out;
+    } catch (e) { return null; }
+  }
+  // Two reads of the same picture: for each transaction, keep the read that has an amount and is most sure of the words
+  function pickBand(list) {
+    const c = list.filter(Boolean); if (!c.length) return null;
+    if (c.some((b) => b.skip)) return null;
+    return c.sort((a, b) => (b.date ? 2 : 0) - (a.date ? 2 : 0) || (b.lines.length ? 1 : 0) - (a.lines.length ? 1 : 0) || b.conf - a.conf)[0];
+  }
+  function joinBands(reads) {
+    reads = reads.filter(Boolean); if (!reads.length) return "";
+    const n = Math.max(...reads.map((r) => r.length)), lines = [];
+    for (let i = 0; i < n; i++) {
+      const pick = pickBand(reads.map((r) => r[i]));
+      if (pick) lines.push(...pick.lines);
+    }
+    return lines.join("\n");
+  }
+
   const MONEY_WORD = /^[-+(]?\$?\d{1,3}(,\d{3})*\.\d{2}\)?(CR|DR)?$|^[-+(]?\$?\d+\.\d{2}\)?(CR|DR)?$/i;
   function layoutText(data) {
     try {
@@ -2592,7 +2693,7 @@
       const hd = headDate(l); if (hd) { date = hd; cur = null; lead = ""; continue; }
       const toks = toksOf(l);
       if (!toks) {
-        if (!date || !hasWords(l) || l.length > 45 || APP_JUNK.test(l)) { lead = ""; continue; }
+        if (!hasWords(l) || l.length > 45 || APP_JUNK.test(l)) { lead = ""; continue; }
         const nxMoney = toksOf(nx);
         if (nxMoney && (hasWords(nx) || isMoneyOnly(nx)) && !(hasBalances && cur && !cur.closed)) lead = (lead + " " + l).trim(); // first line of the next one
         else if (cur && !cur.closed && (hasBalances || /^[-&/(+]|^[a-z]/.test(l))) { cur.desc += " " + l; if (!hasBalances) cur.closed = true; } // second line of this one
@@ -2600,10 +2701,11 @@
       }
       if (isMoneyOnly(l)) {
         if (lead && date) { const a = moneyToken(toks[0]); out.push(cur = { date, desc: lead, v: a.v, tok: toks[0], closed: false }); lead = ""; continue; }
+        if (lead) { lead = ""; cur = null; continue; } // a page title and balance above the first date
         if (cur) cur.closed = true; continue; // the balance line
       }
       let before = l.slice(0, l.indexOf(toks[0])).replace(/[|*•]+/g, " ").trim();
-      if (!date || !hasWords(before)) { lead = ""; continue; }
+      if (!hasWords(before)) { lead = ""; continue; }
       // "Atsi $35,909.78": the rest of the name plus the balance
       if (hasBalances && cur && !cur.closed && toks.length === 1 && !/^[-+(]/.test(toks[0].trim())) { cur.desc += " " + before; cur.closed = true; continue; }
       if (lead) { before = lead + " " + before; lead = ""; }
@@ -2620,7 +2722,7 @@
       else if (bankStyle) sign = neg ? -1 : 1;
       else sign = neg ? 1 : MONEY_IN.test(r.desc) && !/payment.*thank|thank you.*payment/i.test(r.desc) ? 1 : -1;
       if (!bankStyle && /payment.*thank|thank you.*payment|payment received/i.test(r.desc)) sign = 1;
-      return { date: r.date, desc: r.desc.replace(/\s+/g, " ").replace(/^[-–]\s*/, "").trim().slice(0, 80), amt: sign * r.v };
+      return { date: r.date || "", undated: !r.date, desc: r.desc.replace(/\s+/g, " ").replace(/^[-–]\s*/, "").trim().slice(0, 80), amt: sign * r.v };
     }).filter((r) => r.desc.length >= 2 && isFinite(r.amt) && r.amt);
   }
   function bankPrompt(kind) {
@@ -2756,12 +2858,20 @@
         errors.push({ name: f.name || "file " + (i + 1), msg: (e && e.message) || "Something went wrong reading it." });
       }
     }
+    // rows above the first date in a screenshot: use the date from the same row in another screenshot
+    let undated = 0;
+    for (let i = all.length - 1; i >= 0; i--) {
+      const r = all[i]; if (!r.undated) continue;
+      const twin = all.find((x) => !x.undated && x.file !== r.file && Math.abs(x.amt - r.amt) < 0.005 && looksSame({ date: x.date, desc: r.desc, amount: Math.abs(r.amt), kind: "expense" }, { date: x.date, desc: x.desc, amount: Math.abs(x.amt), kind: "expense" }));
+      if (twin) { r.date = twin.date; delete r.undated; } else { all.splice(i, 1); undated++; }
+    }
     importBusy = "";
     if (!all.length) {
+      if (undated) errors.push({ name: "Screenshot", msg: "The rows Penny found had no date showing above them. Take the screenshot so a date heading is at the top." });
       pendingImport = null; render();
       return importFail(errors.length === 1 ? errors[0].name + ": " + errors[0].msg : "Penny couldn't read any of those files. " + errors.map((x) => x.name + ": " + x.msg).join(" "));
     }
-    pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors, balances: planBalances(balances) };
+    pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors, undated, balances: planBalances(balances) };
     Object.assign(pendingImport, buildFromBase(all, {}));
     render();
   }
@@ -2773,7 +2883,13 @@
       if (!text) return [];
       const t = cleanText(text);
       const tries = (lastOcrLayout || []).map((l) => parseAppList(cleanText(l))).concat([parseStatementText(t), parseAppList(t)]);
+      // the gray lines between transactions were found: each space between them is one transaction
+      const dated = (x) => x.filter((r) => !r.undated).length;
+      const banded = (lastOcrBands || []).map((l) => parseAppList(cleanText(l))).sort((a, b) => dated(b) - dated(a))[0];
+      const most = Math.max(0, ...tries.map(dated));
+      if (banded && dated(banded) && dated(banded) >= most - 1) return banded.slice().sort((a, b) => b.date.localeCompare(a.date));
       // the most rows wins; on a tie, the one that read the names most fully
+      tries.forEach((x, i) => { tries[i] = x.filter((r) => !r.undated); }); // only the divider reading is trusted with rows above the first date
       tries.sort((a, b) => b.length - a.length || b.reduce((n, r) => n + r.desc.length, 0) - a.reduce((n, r) => n + r.desc.length, 0));
       const best = tries[0].map((r) => Object.assign({}, r)); best.balance = tries[0].balance; best.closing = tries[0].closing;
       if (!best.length) return best;
@@ -2790,9 +2906,10 @@
       }
       return best.sort((a, b) => b.date.localeCompare(a.date));
     };
-    lastOcrLayout = [];
-    let rows = readRows(await ocrRead(jpeg.blob, true).catch(() => null));
-    if (!rows.length) { lastOcrLayout = []; const inv = await invertImage(jpeg.blob).catch(() => null); if (inv) rows = readRows(await ocrRead(inv, true).catch(() => null)); } // dark mode screenshots
+    lastOcrLayout = []; lastOcrBands = [];
+    const dividers = await findDividers(jpeg.blob).catch(() => []);
+    let rows = readRows(await ocrRead(jpeg.blob, true, dividers).catch(() => null));
+    if (!rows.length) { lastOcrLayout = []; lastOcrBands = []; const inv = await invertImage(jpeg.blob).catch(() => null); if (inv) rows = readRows(await ocrRead(inv, true, dividers).catch(() => null)); } // dark mode screenshots
     return { rows, how: "ocr" };
   }
   function importFail(msg) { importBusy = ""; pendingImport = null; render(); setTimeout(() => openModal('<div class="ci">' + (pennyOn() ? mascot(110, "P", "comfort") : "") + "<h2>Hmm, that didn't work</h2><p>" + esc(msg) + '</p><div class="row" style="justify-content:center"><button class="btn" data-close>Okay</button></div></div>'), 50); }
@@ -2923,6 +3040,7 @@
       const p = pendingImport;
       return '<div class="card-head"><h2>' + icon("upload") + " Check your import</h2></div>" +
         "<p>Found <b>" + p.rows.length + "</b> transactions. Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
+        (p.undated ? '<p class="tiny muted">📅 ' + p.undated + (p.undated === 1 ? " row" : " rows") + " at the top of a screenshot had no date showing, so Penny left " + (p.undated === 1 ? "it" : "them") + " out. Add " + (p.undated === 1 ? "it" : "them") + " by hand, or take a screenshot that starts with a date.</p>" : "") +
         (p.dupes ? '<div class="callout gold small dupe-callout">' + icon("copy") + "<div><b>" + p.dupes + (p.dupes === 1 ? " looks like a duplicate" : " look like duplicates") + "</b> of " + (p.dupes === 1 ? "a transaction" : "transactions") + " you already have" + (p.files && p.files.length > 1 ? " (or that show up in more than one file)" : "") + ". " + (p.dupes === 1 ? "It starts" : "They start") + " unticked so nothing gets counted twice. If one is really a separate purchase, tick it to keep it.</div></div>" : "") +
         (p.src === "ai" || p.src === "ocr" ? '<div class="callout gold small">' + icon("info") + "<div>Penny read these from a picture, so please double check the dates and amounts.</div></div>" : p.src === "pdf" ? '<div class="callout small">' + icon("info") + "<div>Read from your PDF statement. Quick check before importing!</div></div>" : "") +
         (p.files && p.files.length > 1 ? '<p class="small">From <b>' + p.files.length + " files</b>: " + p.files.map(esc).join(", ") + "</p>" : "") +
