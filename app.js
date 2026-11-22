@@ -210,7 +210,12 @@
     if (h.price === 750000 && h.monthlySave === 800) Object.assign(h, { price: 0, monthlySave: 0, monthlyCosts: h.monthlyCosts === 650 ? 0 : h.monthlyCosts });
   }
   function movePass(s) {
+    if (s && !s.isExample && s.flags && s.flags.movePass && !s.flags.cardPass && (s.categories || []).some((c) => c.id === "transfer")) {
+      s.flags.cardPass = true;
+      (s.transactions || []).forEach((t) => { if (!t.recatOn && !t.example && t.cat !== "transfer" && CARD_PAY_RX.test(String(t.desc || "")) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(String(t.desc || ""))) t.cat = "transfer"; });
+    }
     if (!s || s.isExample || (s.flags && s.flags.movePass)) return;
+    s.flags = s.flags || {}; s.flags.cardPass = true;
     if (!(s.categories || []).some((c) => c.id === "transfer")) return;
     s.flags = s.flags || {}; s.flags.movePass = true;
     const me = String((s.profile && s.profile.name) || "").trim().split(/\s+/)[0];
@@ -218,7 +223,7 @@
       if (t.recatOn || t.example) return;
       const d = String(t.desc || "");
       const own = me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d);
-      if (own || TRANSFER_RX.test(d)) t.cat = "transfer";
+      if (own || TRANSFER_RX.test(d) || (CARD_PAY_RX.test(d) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(d))) t.cat = "transfer";
       else if (t.kind === "income" && (t.cat === "pay" || t.cat === "other") && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) t.cat = "payback";
     });
   }
@@ -795,11 +800,15 @@
   }
   // Why Penny picked a category (shown in "Sort my Other")
   const TRANSFER_RX = /\b(TRANSFER (TO|FROM)|TFR[- ]?(TO|FR)|ONLINE TRANSFER|INTERNET TRANSFER|MB[- ]?TRANSFER|WWW TRF|TRF (TO|FROM)|BANK TRANSFER|ACCOUNT TRANSFER|INTER-?ACCOUNT|(TO|FROM) (SAVINGS|CHEQUING|CHECKING|TFSA|HISA)|PAYMENT ?- ?THANK YOU|PAYMENT THANK YOU|PAYMENT RECEIVED|CREDIT CARD PAYMENT|(VISA|MASTERCARD|AMEX) PAYMENT|PAIEMENT)\b/i;
+  // paying off a credit card from chequing or savings: the card statement already has the spending
+  const CARD_BRAND = "(VISA|MASTER ?CARD|MASTERCRD|MC|AMEX|AMERICAN EXPRESS|CREDIT CARD|CR CARD|CC|TRIANGLE|CAPITAL ONE|ROGERS BANK|BRIM|NEO CARD|MBNA|PC FINANCIAL|PCF)";
+  const CARD_PAY_RX = new RegExp("\\b" + CARD_BRAND + "\\b.*\\b(PAY|PYMT|PMT|PAYMENT|PAIEMENT|PREAUTH|PRE-AUTH|BILL ?PAY)|\\b(PAY|PYMT|PMT|PAYMENT|PAIEMENT|BILL ?PAY(MENT)?|PREAUTH)\\b.*\\b" + CARD_BRAND + "\\b", "i");
   const ETRANSFER_IN = /E-?TRANSFER (RECEIVED|DEPOSIT|RCVD|FROM|RECV)|E-?TFR (RCVD|IN)|AUTODEPOSIT|AUTO-DEPOSIT|INTERAC E-?TRANSFER(?!.*\b(SEND|SENT)\b)/i;
   function moneyMove(desc, kind) {
     const d = String(desc || "");
     const me = String((state.profile && state.profile.name) || "").trim().split(/\s+/)[0];
     if (me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d)) return { cat: "transfer", why: "an e-transfer with your own name, so it's your money moving" };
+    if (CARD_PAY_RX.test(d) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(d)) return { cat: "transfer", why: "a credit card payment, and the card statement already counts what you bought" };
     if (TRANSFER_RX.test(d)) return { cat: "transfer", why: "it looks like money moving between your own accounts" };
     if (kind === "income" && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) return { cat: "payback", why: "an e-transfer from someone, like a friend paying you back" };
     return null;
@@ -1587,7 +1596,8 @@
   const LIBS = {
     pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
     pdfWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
-    ocr: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
+    ocr: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js",
+    heic: "https://cdn.jsdelivr.net/npm/heic-to@1.6.3/dist/csp/heic-to.min.js"
   };
   const loadedScripts = {};
   function loadScript(url) {
@@ -1607,6 +1617,30 @@
   }
 
   // ---- reading files ----
+  const isHeic = (b) => /heic|heif/i.test(((b && b.type) || "") + " " + ((b && b.name) || ""));
+  // iPhone HEIC pictures: Safari opens them itself, other browsers get a converter
+  async function openPicture(blob, max) {
+    try { return await imageToJpeg(blob, max); }
+    catch (e) {
+      if (!isHeic(blob)) throw e;
+      const mod = await withTimeout(import(LIBS.heic), 45000, "heic_timeout");
+      if (!mod || typeof mod.heicTo !== "function") throw e;
+      const out = await withTimeout(mod.heicTo({ blob, type: "image/jpeg", quality: 0.9 }), 60000, "heic_timeout");
+      return imageToJpeg(out, max);
+    }
+  }
+  function invertImage(blob) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(blob), img = new Image();
+      img.onload = () => {
+        const cv = document.createElement("canvas"); cv.width = img.width; cv.height = img.height;
+        const ctx = cv.getContext("2d"); ctx.filter = "invert(1) grayscale(1)"; ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url);
+        cv.toBlob((b) => (b ? res(b) : rej(new Error("bad_image"))), "image/png");
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("bad_image")); };
+      img.src = url;
+    });
+  }
   function imageToJpeg(blob, max) {
     return new Promise((res, rej) => {
       const url = URL.createObjectURL(blob), img = new Image();
@@ -1768,12 +1802,66 @@
       return null; // not allowed, unavailable or unreadable: fall back to reading it ourselves
     }
   }
-  async function ocrRead(blob) {
+  async function ocrRead(blob, withLayout) {
     if (inFrame()) return null; // the online artifact blocks the downloads this needs
     await withTimeout(loadScript(LIBS.ocr), 20000, "ocr_unavailable");
     if (!window.Tesseract) return null;
-    const r = await withTimeout(window.Tesseract.recognize(blob, "eng"), 90000, "ocr_timeout");
-    return r && r.data && r.data.text ? r.data.text : null;
+    if (!withLayout || typeof window.Tesseract.createWorker !== "function") {
+      const r = await withTimeout(window.Tesseract.recognize(blob, "eng"), 90000, "ocr_timeout");
+      return r && r.data && r.data.text ? r.data.text : null;
+    }
+    // Bank app screenshots: read once as one block (keeps rows together), then once
+    // in auto mode with word positions (keeps names that wrap onto two lines apart)
+    const w = await withTimeout(window.Tesseract.createWorker("eng"), 60000, "ocr_unavailable");
+    try {
+      const r = await withTimeout(w.recognize(blob), 90000, "ocr_timeout");
+      const lay = [layoutText(r.data)];
+      try { await w.setParameters({ tessedit_pageseg_mode: "3" }); const r3 = await withTimeout(w.recognize(blob), 90000, "ocr_timeout"); lay.unshift(layoutText(r3.data)); } catch (e) { /* the first read is still fine */ }
+      lastOcrLayout = lay.filter(Boolean);
+      return r && r.data && r.data.text ? r.data.text : null;
+    } finally { try { await w.terminate(); } catch (e) { /* already gone */ } }
+  }
+  /* Rebuild rows from where each word sits on screen. Names that wrap onto two
+     lines get joined, and an amount sitting between them gets attached. */
+  let lastOcrLayout = [];
+  const MONEY_WORD = /^[-+(]?\$?\d{1,3}(,\d{3})*\.\d{2}\)?(CR|DR)?$|^[-+(]?\$?\d+\.\d{2}\)?(CR|DR)?$/i;
+  function layoutText(data) {
+    try {
+      let words = data.words;
+      if (!words || !words.length) { words = []; (data.blocks || []).forEach((b) => (b.paragraphs || []).forEach((p) => (p.lines || []).forEach((l) => (l.words || []).forEach((w) => words.push(w))))); }
+      words = words.filter((w) => w && w.bbox && w.text && w.text.trim() && !/^[>›»<?=|]+$/.test(w.text.trim()) && (w.confidence == null || w.confidence > 25))
+        .map((w) => ({ t: w.text.trim().replace(/^[<‹«]+|[>›»]+$/g, ""), x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0) }));
+      if (words.length < 3) return "";
+      // 1) words on the same visual line
+      const lines = [];
+      words.slice().sort((a, b) => a.cy - b.cy).forEach((w) => {
+        const ln = lines.find((l) => Math.abs(l.cy - w.cy) < Math.min(l.h, w.h) * 0.5);
+        if (ln) { ln.w.push(w); ln.y0 = Math.min(ln.y0, w.y0); ln.y1 = Math.max(ln.y1, w.y1); ln.h = Math.max(ln.h, w.h); }
+        else lines.push({ w: [w], cy: w.cy, y0: w.y0, y1: w.y1, h: w.h });
+      });
+      lines.forEach((l) => { l.w.sort((a, b) => a.x0 - b.x0); l.money = l.w.filter((w) => MONEY_WORD.test(w.t)); l.text = l.w.filter((w) => !MONEY_WORD.test(w.t)).map((w) => w.t).join(" "); l.x0 = l.w[0].x0; });
+      lines.sort((a, b) => a.y0 - b.y0);
+      const hs = lines.map((l) => l.h).sort((a, b) => a - b), mh = hs[Math.floor(hs.length / 2)] || 10;
+      // 2) join a name that wraps (two text-only lines close together, lined up on the left)
+      const out = [];
+      for (const l of lines) {
+        let prev = out[out.length - 1];
+        if (prev && prev.loneMoney && out.length > 1) prev = out[out.length - 2]; // an amount can sit between the two lines of a name
+        const textOnly = !l.money.length && /[a-z]{2}/i.test(l.text);
+        if (textOnly && prev && prev.textOnly && l.y0 - prev.y1 < mh * 1.25 && Math.abs(l.x0 - prev.x0) < mh * 1.5 && !lineDate(prev.text, 2000) && !lineDate(l.text, 2000)) { prev.text += " " + l.text; prev.y1 = l.y1; continue; }
+        out.push({ text: l.text, money: l.money.slice(), y0: l.y0, y1: l.y1, x0: l.x0, cy: l.cy, textOnly, loneMoney: !l.text && l.money.length > 0 });
+      }
+      // 3) an amount on its own line that sits beside a wrapped name belongs to it
+      const final = [];
+      for (const o of out) {
+        if (o.loneMoney) {
+          const host = out.find((b) => b.textOnly && b.y1 - b.y0 > mh * 1.4 && o.cy > b.y0 && o.cy < b.y1);
+          if (host) { host.money = host.money.concat(o.money); continue; }
+        }
+        final.push(o);
+      }
+      return final.map((o) => (o.text + " " + o.money.map((m) => m.t).join(" ")).trim()).join("\n");
+    } catch (e) { return ""; }
   }
 
   // ---- screens ----
@@ -1788,7 +1876,7 @@
     openModal('<div class="stack"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(76, "P", "taxes") : "") + '<div><h2>Scan a receipt or bill</h2><p class="small muted">Penny reads it, fills everything in and picks a category. You check it before it\'s saved.</p></div></div>' +
       '<div class="pick-grid scan-grid">' +
       '<label class="pick"><input type="file" accept="image/*" capture="environment" data-change="receiptFile"><span class="pick-emoji">📸</span><b>Take a photo</b><span class="tiny muted">Use your camera</span></label>' +
-      '<label class="pick"><input type="file" accept="image/*,application/pdf,.pdf,.eml,.txt,.html,.htm" data-change="receiptFile"><span class="pick-emoji">🖼️</span><b>Choose a file</b><span class="tiny muted">Photo, screenshot, PDF bill or saved email</span></label>' +
+      '<label class="pick"><input type="file" accept="image/*,.heic,.heif,application/pdf,.pdf,.eml,.txt,.html,.htm" data-change="receiptFile"><span class="pick-emoji">🖼️</span><b>Choose a file</b><span class="tiny muted">Photo, screenshot, PDF bill or saved email</span></label>' +
       '<button type="button" class="pick" data-act="pasteReceipt"><span class="pick-emoji">✉️</span><b>Paste an email</b><span class="tiny muted">Copy the text of an emailed receipt or bill</span></button></div>' +
       '<p class="tiny muted">📌 Tips: lay the receipt flat, use good light and fit the whole thing in the photo. ' + (inFrame() ? "Reading photos here uses Claude, which asks your permission the first time." : "Photos are read on this device.") + "</p></div>");
   }
@@ -1837,7 +1925,7 @@
       else image = file;
       if (image) {
         let jpeg;
-        try { jpeg = await imageToJpeg(image, 1600); } catch (e) {
+        try { jpeg = await openPicture(image, 1600); } catch (e) {
           return receiptError(/heic|heif/.test(name + type) ? "iPhone HEIC photos can't be opened here. Take a screenshot of the receipt, or set your camera to \"Most Compatible\"." : "That picture couldn't be opened. Try another photo or a screenshot.");
         }
         preview = jpeg.preview;
@@ -2476,6 +2564,61 @@
     }
     return out;
   }
+  /* Banking app screenshots: the date is a heading, the name can wrap onto a
+     second line, and a running balance sits under each amount. */
+  const APP_JUNK = /^(home|explore|accounts?|move money|rewards|pay( & transfer)?|transfers?|more|menu|search|filter|transactions|activity|pending|posted|see all|view all|done|back|[<>?=\s]+)$|home.*(accounts|explore|more)/i;
+  function parseAppList(text) {
+    const year = statementYear(text), today = todayISO();
+    const lines = String(text || "").split(/\n/).map((l) => l.replace(/\s+/g, " ").replace(/\s*[>›»]+\s*$/, "").trim()).filter(Boolean);
+    const toksOf = (l) => l.match(MONEY_RX);
+    const isMoneyOnly = (l) => { const t = toksOf(l); return !!t && t.length === 1 && l.replace(t[0], "").replace(/[^a-z]/gi, "").length === 0; };
+    const hasWords = (l) => /[a-z]{2}/i.test(l);
+    const headDate = (l) => {
+      if (/^today\b/i.test(l)) return today;
+      if (/^yesterday\b/i.test(l)) return toISO(new Date(Date.now() - 86400000));
+      const ld = lineDate(l.replace(/^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+/i, ""), year); if (!ld) return null;
+      return ld.rest.replace(/[^a-z0-9$]/gi, "").length <= 2 ? ld.date : null;
+    };
+    // a running balance: a lone amount right under an amount line, or two amounts on one line
+    const hasBalances = lines.some((l, i) => i && isMoneyOnly(l) && toksOf(lines[i - 1]) && hasWords(lines[i - 1])) || lines.filter((l) => (toksOf(l) || []).length === 2).length > 1;
+    const out = []; let date = null, cur = null, lead = "";
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i], nx = lines[i + 1] || "";
+      if (SKIP_LINE.test(l)) { cur = null; lead = ""; continue; }
+      const hd = headDate(l); if (hd) { date = hd; cur = null; lead = ""; continue; }
+      const toks = toksOf(l);
+      if (!toks) {
+        if (!date || !hasWords(l) || l.length > 45 || APP_JUNK.test(l)) { lead = ""; continue; }
+        const nxMoney = toksOf(nx);
+        if (nxMoney && (hasWords(nx) || isMoneyOnly(nx)) && !(hasBalances && cur && !cur.closed)) lead = (lead + " " + l).trim(); // first line of the next one
+        else if (cur && !cur.closed && (hasBalances || /^[-&/(+]|^[a-z]/.test(l))) { cur.desc += " " + l; if (!hasBalances) cur.closed = true; } // second line of this one
+        continue;
+      }
+      if (isMoneyOnly(l)) {
+        if (lead && date) { const a = moneyToken(toks[0]); out.push(cur = { date, desc: lead, v: a.v, tok: toks[0], closed: false }); lead = ""; continue; }
+        if (cur) cur.closed = true; continue; // the balance line
+      }
+      let before = l.slice(0, l.indexOf(toks[0])).replace(/[|*•]+/g, " ").trim();
+      if (!date || !hasWords(before)) { lead = ""; continue; }
+      // "Atsi $35,909.78": the rest of the name plus the balance
+      if (hasBalances && cur && !cur.closed && toks.length === 1 && !/^[-+(]/.test(toks[0].trim())) { cur.desc += " " + before; cur.closed = true; continue; }
+      if (lead) { before = lead + " " + before; lead = ""; }
+      const a = moneyToken(toks[0]); if (!a.v) continue;
+      out.push(cur = { date, desc: before, v: a.v, tok: toks[0], closed: toks.length >= 2 });
+    }
+    // Bank accounts show money out with a minus. Credit cards show purchases plain and refunds with a minus.
+    const minus = out.filter((r) => moneyToken(r.tok).neg && !/CR$/i.test(r.tok.trim())).length;
+    const bankStyle = hasBalances || minus * 2 > out.length;
+    return out.map((r) => {
+      const t = r.tok.trim(), neg = moneyToken(t).neg, plus = /^\+/.test(t), cr = /CR$/i.test(t);
+      let sign;
+      if (plus || cr) sign = 1;
+      else if (bankStyle) sign = neg ? -1 : 1;
+      else sign = neg ? 1 : MONEY_IN.test(r.desc) && !/payment.*thank|thank you.*payment/i.test(r.desc) ? 1 : -1;
+      if (!bankStyle && /payment.*thank|thank you.*payment|payment received/i.test(r.desc)) sign = 1;
+      return { date: r.date, desc: r.desc.replace(/\s+/g, " ").replace(/^[-–]\s*/, "").trim().slice(0, 80), amt: sign * r.v };
+    }).filter((r) => r.desc.length >= 2 && isFinite(r.amt) && r.amt);
+  }
   function bankPrompt(kind) {
     return (kind === "image" ? "The attached image is a screenshot or photo of a bank or credit card transaction list from Canada." : "Below is the text of a Canadian bank or credit card statement.") +
       " List every transaction you can read. Reply with only JSON like {\"transactions\":[{\"date\":\"2026-11-03\",\"description\":\"TIM HORTONS #1234\",\"amount\":-4.50}]}." +
@@ -2619,17 +2762,42 @@
     render();
   }
   async function readStatementImage(blob) {
-    let jpeg; try { jpeg = await imageToJpeg(blob, 2000); } catch (e) { return { rows: [], error: /heic|heif/i.test(blob.type || "") ? "iPhone HEIC pictures can't be opened here. Take a screenshot instead (screenshots are PNG)." : "That picture couldn't be opened. Try another screenshot." }; }
+    let jpeg; try { jpeg = await openPicture(blob, 2000); } catch (e) { return { rows: [], error: isHeic(blob) ? "This iPhone HEIC picture couldn't be opened. Check your internet and try again, or send a screenshot instead (screenshots are PNG)." : "That picture couldn't be opened. Try another screenshot." }; }
     const ai = await aiStatement("", jpeg.blob);
     if (ai && ai.length) return { rows: ai, how: "ai" }; // ai.balance comes along with the list
-    const text = await ocrRead(jpeg.blob).catch(() => null);
-    return { rows: text ? parseStatementText(cleanText(text)) : [], how: "ocr" };
+    const readRows = (text) => {
+      if (!text) return [];
+      const t = cleanText(text);
+      const tries = (lastOcrLayout || []).map((l) => parseAppList(cleanText(l))).concat([parseStatementText(t), parseAppList(t)]);
+      // the most rows wins; on a tie, the one that read the names most fully
+      tries.sort((a, b) => b.length - a.length || b.reduce((n, r) => n + r.desc.length, 0) - a.reduce((n, r) => n + r.desc.length, 0));
+      const best = tries[0].map((r) => Object.assign({}, r)); best.balance = tries[0].balance; best.closing = tries[0].closing;
+      if (!best.length) return best;
+      const key = (r) => r.date + "|" + r.amt.toFixed(2), words = (d) => d.toUpperCase().split(/[^A-Z0-9]+/).filter((w) => w.length > 1);
+      for (const other of tries.slice(1)) {
+        const left = {}; best.forEach((r) => { left[key(r)] = (left[key(r)] || 0) + 1; });
+        for (const r of other) {
+          const same = best.filter((b) => key(b) === key(r));
+          // a fuller name for the same row (the other read caught both lines)
+          same.forEach((b) => { const bw = words(b.desc), rw = words(r.desc); if (rw.length > bw.length && bw.every((w) => rw.includes(w))) b.desc = r.desc; });
+          if (left[key(r)]) left[key(r)]--;
+          else if (other.length >= best.length * 0.6 && words(r.desc).length) best.push(Object.assign({}, r)); // a row only this read caught
+        }
+      }
+      return best.sort((a, b) => b.date.localeCompare(a.date));
+    };
+    lastOcrLayout = [];
+    let rows = readRows(await ocrRead(jpeg.blob, true).catch(() => null));
+    if (!rows.length) { lastOcrLayout = []; const inv = await invertImage(jpeg.blob).catch(() => null); if (inv) rows = readRows(await ocrRead(inv, true).catch(() => null)); } // dark mode screenshots
+    return { rows, how: "ocr" };
   }
   function importFail(msg) { importBusy = ""; pendingImport = null; render(); setTimeout(() => openModal('<div class="ci">' + (pennyOn() ? mascot(110, "P", "comfort") : "") + "<h2>Hmm, that didn't work</h2><p>" + esc(msg) + '</p><div class="row" style="justify-content:center"><button class="btn" data-close>Okay</button></div></div>'), 50); }
   function statementCat(desc, kind) {
     let cat = autoCat(desc, kind);
     if (kind === "expense" && cat === "other") { const g = guessCategory("", desc); if (g.cat !== "other") cat = g.cat; }
     if (kind === "income" && /refund|return|reversal|cash ?back|rebate|credit|gst|hst|ccb|benefit|tax/i.test(desc) && state.categories.some((c) => c.id === "gov")) cat = "gov";
+    // money back from a store (a return on your card) is a refund, not a paycheque
+    if (kind === "income" && (cat === "pay" || cat === "other") && state.categories.some((c) => c.id === "gov") && !/payroll|salary|pay ?cheque|direct dep|deposit/i.test(desc)) { const g = explainCat(desc, "expense"); if (g && g.cat && !["other", "transfer", "payback"].includes(g.cat) && (catById(g.cat).group || "") !== "income") cat = "gov"; }
     return cat;
   }
   const CARD_PAYMENT = /payment.*thank|thank you.*payment|payment received|paiement|autopay(ment)?|pre-?authorized payment/i;
@@ -2740,7 +2908,7 @@
       "<ul><li><b>RBC:</b> Account, Download, choose CSV (Comma Separated Values).</li><li><b>TD:</b> Account activity, Download, choose Spreadsheet (.csv).</li><li><b>Scotiabank, BMO, CIBC:</b> Account details, Download transactions, CSV.</li><li><b>Tangerine, EQ, Wealthsimple, Simplii:</b> look for Export or Download, CSV.</li></ul>" +
       '<p class="muted">Most files from Canadian banks work. The app sorts them using your auto-sort rules.</p></div>' +
       '<label class="drop" style="cursor:pointer;display:grid;place-items:center;gap:8px">' + icon("upload") + "<b>Choose CSVs, PDFs or screenshots</b><span class=\"small\">Pick as many as you like, or drag them here</span>" +
-      '<input type="file" multiple accept=".csv,text/csv,.pdf,application/pdf,image/*" data-change="importFile" hidden></label></div>');
+      '<input type="file" multiple accept=".csv,text/csv,.pdf,application/pdf,image/*,.heic,.heif" data-change="importFile" hidden></label></div>');
   }
 
   // The transactions behind a budget card: tap to open, move any of them to another category right there
