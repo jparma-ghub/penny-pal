@@ -867,3 +867,4 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .amt-flip { all: unset; cursor: pointer; font-weight: 700; padding: 2px 6px; border-radius: 8px; white-space: nowrap; }
 .amt-flip:hover, .amt-flip:focus-visible { background: var(--surface-2); outline: 1px dashed var(--line); }
 .found-item { cursor: pointer; } .found-item input { flex: none; width: 18px; height: 18px; }
+#importBox .drop.over { outline: 3px dashed var(--accent); background: var(--accent-2); }

@@ -208,12 +208,18 @@
     const h = s.house || {};
     if (h.price === 750000 && h.monthlySave === 800) Object.assign(h, { price: 0, monthlySave: 0, monthlyCosts: h.monthlyCosts === 650 ? 0 : h.monthlyCosts });
   }
+  function travelPass(s) {
+    if (!s || s.isExample || (s.flags && s.flags.travelPass)) return;
+    if (!(s.categories || []).some((c) => c.id === "travel")) return;
+    s.flags = s.flags || {}; s.flags.travelPass = true;
+    (s.transactions || []).forEach((t) => { if (t.kind === "expense" && !t.recatOn && t.cat !== "travel" && looksForeign(t.desc)) t.cat = "travel"; });
+  }
   function normalize(saved) {
     const base = blankState(), migrating = !saved.seenDefaults;
     purgeExample(saved); clearMadeUpDefaults(saved);
         if (migrating) saved.seenDefaults = { cats: [], rules: [] };
         for (const k of Object.keys(base)) if (saved[k] === undefined) saved[k] = base[k];
-        defaultsAdded = syncDefaults(saved, migrating);
+        defaultsAdded = syncDefaults(saved, migrating); travelPass(saved);
         migratePalette(saved);
         if (!saved.ui || !saved.ui.seenVersion) { saved.ui = saved.ui || {}; saved.ui.seenVersion = "1"; }
         if (saved.ui.setupDone === undefined) saved.ui.setupDone = !saved.isExample; // people from older versions already set things up
@@ -693,8 +699,24 @@
     return null;
   }
   const moneyCell = (s) => { s = String(s || "").trim(); if (!s) return null; const neg = /^\(.*\)$/.test(s) || /^-/.test(s.replace(/[$\s]/g, "")); const n = parseFloat(s.replace(/[^0-9.]/g, "")); return isFinite(n) ? (neg ? -n : n) : null; };
+  /* Spending outside Canada goes to Travel: foreign money, a foreign place, a foreign fee, or a trip booking */
+  const US_STATES = "AL|AK|AZ|AR|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC";
+  const FOREIGN_RX = [
+    /\b(USD|EUR|GBP|JPY|MXN|CHF|AUD|NZD|THB|KRW|CNY|RMB|HKD|SGD|PHP|INR|AED|TRY|BRL|DKK|SEK|NOK|ISK|CZK|PLN|HUF|ZAR|DOP|CRC|COP|PEN|ARS|CLP|VND|IDR|MYR|TWD)\b/,
+    /@\s?\d+\.\d{2,6}\b|exchange rate|conversion rate|foreign (currency|transaction|exchange)|\bFX\b|\bintl\b|international (transaction|purchase)|cross[- ]border/i,
+    new RegExp("\\b[A-Z][A-Z .'-]{2,}\\s(" + US_STATES + ")(\\s\\d{5})?\\s*$"),
+    /\b(USA|U\.S\.A|UNITED STATES|GBR|UNITED KINGDOM|FRA|FRANCE|JPN|JAPAN|MEX|MEXICO|ITA|ITALY|ESP|SPAIN|DEU|GERMANY|PRT|PORTUGAL|NLD|IRL|IRELAND|GRC|GREECE|THA|THAILAND|KOR|KOREA|CHN|HKG|HONG KONG|SGP|SINGAPORE|AUS|AUSTRALIA|NZL|PHL|PHILIPPINES|VNM|VIETNAM|IDN|BALI|CUB|CUBA|DOM|PUNTA CANA|JAM|JAMAICA|CRI|COSTA RICA|BRA|BRAZIL|ARG|PER|PERU|COL|COLOMBIA|CHE|SWITZERLAND|AUT|AUSTRIA|BEL|DNK|SWE|NOR|ISL|ICELAND|TUR|TURKEY|ARE|DUBAI|IND|INDIA|EGY|MAR|MOROCCO|ZAF)\s*$/,
+    /\b(LONDON|PARIS|ROME|MADRID|BARCELONA|LISBON|AMSTERDAM|DUBLIN|TOKYO|OSAKA|SEOUL|BANGKOK|CANCUN|LAS VEGAS|NEW YORK|ORLANDO|MIAMI|HONOLULU)\b/,
+    /air canada|westjet|porter air|flair air|swoop|united airlines|delta air|american air|air transat|sunwing|lufthansa|klm|british airways|emirates|expedia|booking\.com|hotels\.com|airbnb|vrbo|marriott|hilton|hyatt|best western|holiday inn|hostel|duty free|airport|nexus|trip\.com|kayak|travelocity/i
+  ];
+  function looksForeign(desc) {
+    const up = String(desc || "").toUpperCase().trim();
+    if (/\b(ON|QC|BC|AB|MB|SK|NS|NB|NL|PE|YT|NT|NU|CANADA|CAN)\s*$/.test(up) && !FOREIGN_RX[0].test(up) && !FOREIGN_RX[5].test(desc)) return false; // a Canadian place
+    return FOREIGN_RX.some((rx) => rx.test(rx.flags.includes("i") ? desc : up));
+  }
   function autoCat(desc, kind) {
     const up = desc.toUpperCase();
+    if (kind !== "income" && state.categories.some((c) => c.id === "travel") && looksForeign(desc)) return "travel";
     for (const r of state.rules) {
       if (r.match && up.includes(r.match.toUpperCase())) {
         const c = state.categories.find((x) => x.id === r.cat);
@@ -754,7 +776,7 @@
   }
   function barChart(items, keys, w = 600, h = 220) {
     const L = 46, R = 8, T = 10, B = 26, iw = w - L - R, ih = h - T - B;
-    const max = niceMax(Math.max(1, ...items.flatMap((it) => keys.map((k) => it[k.key] || 0))));
+    const max = niceMax(Math.max(100, ...items.flatMap((it) => keys.map((k) => it[k.key] || 0))));
     const y = (v) => T + ih - (v / max) * ih;
     let g = "";
     for (let i = 0; i <= 4; i++) { const v = (max / 4) * i; g += '<line x1="' + L + '" x2="' + (w - R) + '" y1="' + y(v) + '" y2="' + y(v) + '" style="stroke:var(--line)" stroke-dasharray="' + (i ? "3 4" : "0") + '"></line><text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + short$(v) + "</text>"; }
@@ -769,7 +791,7 @@
   function lineChart(xs, series, opts = {}) {
     const w = opts.w || 640, h = opts.h || 230, L = 52, R = 14, T = 12, B = 26, iw = w - L - R, ih = h - T - B;
     const all = series.flatMap((s) => s.ys);
-    const max = niceMax(Math.max(1, ...all)), min = Math.min(0, ...all) < 0 ? -niceMax(-Math.min(...all)) : 0;
+    const max = niceMax(Math.max(100, ...all)), min = Math.min(0, ...all) < 0 ? -niceMax(-Math.min(...all)) : 0;
     const x = (i) => L + (xs.length > 1 ? (i * iw) / (xs.length - 1) : iw / 2);
     const y = (v) => T + ih - ((v - min) / (max - min)) * ih;
     let g = "";
@@ -2203,33 +2225,62 @@
     catch (e) { if (e && e.code === "rate_limited") throw e; return null; }
   }
   let importBusy = "";
-  async function importStatement(file) {
+  // Read one file (CSV, PDF or picture) into signed rows: amt < 0 is money out
+  async function readImportFile(file) {
     const name = (file.name || "").toLowerCase(), type = (file.type || "").toLowerCase();
+    const isCsv = /\.(csv|txt)$/.test(name) || /csv|text\/plain/.test(type);
     const isPdf = type === "application/pdf" || name.endsWith(".pdf"), isImg = type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/.test(name);
-    if (file.size > 25 * 1024 * 1024) return importFail("That file is over 25 MB. Try a smaller PDF or a screenshot.");
-    if (!file.size) return importFail("That file looks empty. Try choosing it again.");
-    importBusy = isPdf ? "Penny is reading your statement..." : "Penny is reading your screenshot..."; render();
-    try {
-      let rows = null, how = "";
-      if (isPdf) {
-        const pdf = await withTimeout(readPdf(file, 20), 45000, "pdf_timeout").catch((e) => { throw new Error(e && /load_failed|pdf_unavailable/.test(e.message) ? "pdf_offline" : "pdf_bad"); });
-        const text = cleanText(pdf.text);
-        rows = parseStatementText(text); how = "pdf";
-        if (rows.length < 2 && text.length > 40) { const ai = await aiStatement(text, null); if (ai && ai.length > rows.length) { rows = ai; how = "ai"; } }
-        if (!rows.length && pdf.image) { const r = await readStatementImage(pdf.image); rows = r.rows; how = r.how; }
-      } else if (isImg) {
-        const r = await readStatementImage(file); rows = r.rows; how = r.how;
-        if (r.error) return importFail(r.error);
-      } else return importFail("Penny can read CSV files, PDF statements and screenshots. That kind of file isn't one of them.");
-      if (!rows || !rows.length) return importFail(isPdf ? "Penny couldn't find any transactions in that PDF. If it's a scanned statement, try a clear screenshot instead, or download the CSV from online banking." : "Penny couldn't read any transactions in that picture. Try a sharper screenshot that shows the dates and amounts.");
-      importBusy = "";
-      pendingImport = { src: how, base: rows, flip: false };
-      Object.assign(pendingImport, buildFromBase(rows, false));
-      render();
-    } catch (e) {
-      const m = e && e.message;
-      importFail(e && e.code === "rate_limited" ? "Penny needs a little break from reading. Try again in a minute." : m === "pdf_offline" ? "Reading PDFs needs internet the first time. Try again when you're online." : m === "pdf_bad" || m === "pdf_timeout" ? "That PDF couldn't be opened. It might be password protected. Try a screenshot or the CSV download instead." : "Something went wrong reading that file. Try a CSV or a screenshot instead.");
+    if (!file.size) throw new Error("It looks empty.");
+    if (file.size > 25 * 1024 * 1024) throw new Error("It's over 25 MB.");
+    if (isCsv) {
+      const rows = readBankRows(parseCSV(await file.text()), false).map((r) => ({ date: r.date, desc: r.desc, amt: r.kind === "income" ? r.amount : -r.amount }));
+      if (!rows.length) throw new Error("No transactions found. Make sure it's the CSV from your bank.");
+      return { rows, how: "csv" };
     }
+    if (isPdf) {
+      let pdf;
+      try { pdf = await withTimeout(readPdf(file, 20), 45000, "pdf_timeout"); }
+      catch (e) { throw new Error(e && /load_failed|pdf_unavailable/.test(e.message) ? "Reading PDFs needs internet the first time." : "It couldn't be opened (it might have a password)."); }
+      const text = cleanText(pdf.text);
+      let rows = parseStatementText(text), how = "pdf";
+      if (rows.length < 2 && text.length > 40) { const ai = await aiStatement(text, null); if (ai && ai.length > rows.length) { rows = ai; how = "ai"; } }
+      if (!rows.length && pdf.image) { const r = await readStatementImage(pdf.image); rows = r.rows; how = r.how; }
+      if (!rows.length) throw new Error("No transactions found. If it's a scanned statement, try a screenshot or the CSV.");
+      return { rows, how };
+    }
+    if (isImg) {
+      const r = await readStatementImage(file);
+      if (r.error) throw new Error(r.error);
+      if (!r.rows.length) throw new Error("Penny couldn't read any transactions in it. Try a sharper screenshot.");
+      return { rows: r.rows, how: r.how };
+    }
+    throw new Error("Penny can read CSV files, PDF statements and screenshots, not this kind of file.");
+  }
+  async function importFiles(fileList) {
+    const files = Array.from(fileList || []).filter(Boolean).slice(0, 30);
+    if (!files.length) return;
+    const all = [], errors = [], hows = new Set(), names = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      importBusy = files.length > 1 ? "Reading " + (i + 1) + " of " + files.length + ": " + (f.name || "file") : /\.pdf$/i.test(f.name || "") ? "Penny is reading your statement..." : /\.csv$/i.test(f.name || "") ? "Penny is reading your file..." : "Penny is reading your screenshot...";
+      render();
+      try {
+        const r = await readImportFile(f);
+        names.push(f.name || "file " + (i + 1)); hows.add(r.how);
+        r.rows.forEach((row) => all.push(Object.assign({ file: names.length - 1 }, row)));
+      } catch (e) {
+        if (e && e.code === "rate_limited") { errors.push({ name: f.name, msg: "Penny needed a break from reading. Try this one again in a minute." }); continue; }
+        errors.push({ name: f.name || "file " + (i + 1), msg: (e && e.message) || "Something went wrong reading it." });
+      }
+    }
+    importBusy = "";
+    if (!all.length) {
+      pendingImport = null; render();
+      return importFail(errors.length === 1 ? errors[0].name + ": " + errors[0].msg : "Penny couldn't read any of those files. " + errors.map((x) => x.name + ": " + x.msg).join(" "));
+    }
+    pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors };
+    Object.assign(pendingImport, buildFromBase(all, {}));
+    render();
   }
   async function readStatementImage(blob) {
     let jpeg; try { jpeg = await imageToJpeg(blob, 2000); } catch (e) { return { rows: [], error: /heic|heif/i.test(blob.type || "") ? "iPhone HEIC pictures can't be opened here. Take a screenshot instead (screenshots are PNG)." : "That picture couldn't be opened. Try another screenshot." }; }
@@ -2246,10 +2297,18 @@
     return cat;
   }
   const CARD_PAYMENT = /payment.*thank|thank you.*payment|payment received|paiement|autopay(ment)?|pre-?authorized payment/i;
-  function buildFromBase(base, flip) {
+  function buildFromBase(base, flips) {
+    flips = flips === true ? { all: true } : flips || {};
     const have = new Set(state.transactions.map((t) => t.date + "|" + t.desc + "|" + (+t.amount).toFixed(2)));
-    const all = base.map((r) => { const a = flip ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind) }; });
-    const rows = all.filter((r) => !have.has(r.date + "|" + r.desc + "|" + r.amount.toFixed(2)));
+    const all = base.map((r) => { const a = flips.all || flips[r.file] ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind), file: r.file }; });
+    // the same transaction in two overlapping statements only counts once
+    const seenInBatch = {};
+    const rows = all.filter((r) => {
+      const k = r.date + "|" + r.desc + "|" + r.amount.toFixed(2);
+      if (have.has(k)) return false;
+      if (seenInBatch[k] !== undefined && seenInBatch[k] !== r.file) return false;
+      seenInBatch[k] = r.file; return true;
+    }).sort((a, b) => b.date.localeCompare(a.date));
     // paying off a credit card isn't income: start those unticked
     const skip = {}; rows.forEach((r, i) => { if (r.kind === "income" && CARD_PAYMENT.test(r.desc)) skip[i] = true; });
     return { rows, dupes: all.length - rows.length, skip };
@@ -2296,22 +2355,24 @@
     if (pendingImport) {
       const p = pendingImport;
       return '<div class="card-head"><h2>' + icon("upload") + " Check your import</h2></div>" +
-        "<p>Found <b>" + p.rows.length + "</b> transactions" + (p.dupes ? ", skipping <b>" + p.dupes + "</b> you already have" : "") + ". Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
+        "<p>Found <b>" + p.rows.length + "</b> transactions" + (p.dupes ? ", skipping <b>" + p.dupes + "</b> " + (p.files && p.files.length > 1 ? "that are already in Penny or show up in more than one file" : "you already have") : "") + ". Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
         (p.src === "ai" || p.src === "ocr" ? '<div class="callout gold small">' + icon("info") + "<div>Penny read these from a picture, so please double check the dates and amounts.</div></div>" : p.src === "pdf" ? '<div class="callout small">' + icon("info") + "<div>Read from your PDF statement. Quick check before importing!</div></div>" : "") +
-        '<div class="table-wrap import-table" style="margin:12px 0"><table><thead><tr><th></th><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th></tr></thead><tbody>' +
+        (p.files && p.files.length > 1 ? '<p class="small">From <b>' + p.files.length + " files</b>: " + p.files.map(esc).join(", ") + "</p>" : "") +
+        (p.errors && p.errors.length ? '<div class="callout red small">' + icon("triangle-alert") + "<div><b>Couldn't read " + p.errors.length + (p.errors.length === 1 ? " file" : " files") + ":</b> " + p.errors.map((x) => esc(x.name) + " (" + esc(x.msg) + ")").join("; ") + "</div></div>" : "") +
+        '<div class="table-wrap import-table" style="margin:12px 0"><table><thead><tr><th></th><th>Date</th><th>Description</th><th>Category</th>' + (p.files && p.files.length > 1 ? "<th>From</th>" : "") + '<th class="r">Amount</th></tr></thead><tbody>' +
         (p.rows.some((t, i) => (p.skip || {})[i] && CARD_PAYMENT.test(t.desc)) ? '<p class="tiny muted">💳 Credit card payments start unticked: paying off your card isn\'t new money, it\'s already counted when you spent it.</p>' : "") +
-        p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + "</td><td>" + esc(catById(t.cat).name) + '</td><td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
+        p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + "</td><td>" + esc(catById(t.cat).name) + "</td>" + (p.files && p.files.length > 1 ? '<td class="tiny muted">' + esc(p.files[t.file] || "") + "</td>" : "") + '<td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
         "</tbody></table></div>" +
         '<div class="callout">' + icon("info") + "<div>Spending should show as minus and paycheques as plus. If it's backwards (common with credit card files), press Flip.</div></div>" +
-        '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + (p.rows.length - Object.values(p.skip || {}).filter(Boolean).length) + '</button><button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + ' Flip plus/minus</button><button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
+        '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + (p.rows.length - Object.values(p.skip || {}).filter(Boolean).length) + '</button>' + (p.files && p.files.length > 1 ? p.files.map((n, i) => '<button class="btn ghost sm" data-act="flipImport" data-file="' + i + '">' + icon("refresh-cw") + " Flip " + esc(n.length > 18 ? n.slice(0, 16) + "…" : n) + "</button>").join("") : '<button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + " Flip plus/minus</button>") + '<button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
     }
     return '<div class="card-head"><h2>' + icon("upload") + " Import from your bank</h2></div>" +
       (importBusy ? '<div class="ci">' + (pennyOn() ? mascot(100, "P", "reading") : "") + "<h3>" + esc(importBusy) + '</h3><div class="dots-loading"><span></span><span></span><span></span></div><p class="small muted">Long statements can take a few seconds.</p></div>' :
       '<div class="grid g2"><div class="stack small"><p>Pick a <b>CSV</b> or <b>PDF statement</b> from online banking, or a <b>screenshot</b> of your transactions from your banking app. You check everything before it\'s saved.</p>' +
       "<ul><li><b>RBC:</b> Account, Download, choose CSV (Comma Separated Values).</li><li><b>TD:</b> Account activity, Download, choose Spreadsheet (.csv).</li><li><b>Scotiabank, BMO, CIBC:</b> Account details, Download transactions, CSV.</li><li><b>Tangerine, EQ, Wealthsimple, Simplii:</b> look for Export or Download, CSV.</li></ul>" +
       '<p class="muted">Most files from Canadian banks work. The app sorts them using your auto-sort rules.</p></div>' +
-      '<label class="drop" style="cursor:pointer;display:grid;place-items:center;gap:8px">' + icon("upload") + "<b>Choose a CSV, PDF or screenshot</b><span class=\"small\">Tap to browse your files or photos</span>" +
-      '<input type="file" accept=".csv,text/csv,.pdf,application/pdf,image/*" data-change="importFile" hidden></label></div>');
+      '<label class="drop" style="cursor:pointer;display:grid;place-items:center;gap:8px">' + icon("upload") + "<b>Choose CSVs, PDFs or screenshots</b><span class=\"small\">Pick as many as you like, or drag them here</span>" +
+      '<input type="file" multiple accept=".csv,text/csv,.pdf,application/pdf,image/*" data-change="importFile" hidden></label></div>');
   }
 
   /* PAGE: Budgets ----------------------------------------------------- */
@@ -2917,7 +2978,12 @@
     editTx(el) { txModal(state.transactions.find((t) => t.id === el.dataset.id)); },
     delTx(el) { state.transactions = state.transactions.filter((t) => t.id !== el.dataset.id); commit("Deleted"); },
     toggleImport() { const b = $("#importBox"); if (b) b.hidden = !b.hidden; },
-    flipImport() { const p = pendingImport; p.flip = !p.flip; p.skip = {}; Object.assign(p, p.base ? buildFromBase(p.base, p.flip) : buildImport(p.raw, p.flip)); render(); },
+    flipImport(el) {
+      const p = pendingImport; if (!p) return;
+      const f = el && el.dataset.file !== undefined ? +el.dataset.file : "all";
+      p.flips = p.flips || {}; p.flips[f] = !p.flips[f]; p.skip = {};
+      Object.assign(p, buildFromBase(p.base, p.flips)); render();
+    },
     flipRow(el) { const r = pendingImport && pendingImport.rows[+el.dataset.i]; if (!r) return; r.kind = r.kind === "income" ? "expense" : "income"; r.cat = statementCat(r.desc, r.kind); render(); },
     cancelImport() { pendingImport = null; render(); },
     doImport() {
@@ -3141,19 +3207,7 @@
       if (el.value === "cancelled") { s.cancelledOn = todayISO(); commit(); celebrate("cancel", { sub: "That's " + money(monthlyCost(s) * 12) + " a year back in your pocket." }); }
       else commit();
     },
-    importFile(el) {
-      const file = el.files && el.files[0]; if (!file) return; el.value = "";
-      const nm = (file.name || "").toLowerCase();
-      if (!/\.(csv|txt)$/.test(nm) && !/csv|text\/plain/.test(file.type || "")) return importStatement(file);
-      const fr = new FileReader();
-      fr.onload = () => {
-        const raw = parseCSV(String(fr.result));
-        const built = buildImport(raw, false);
-        if (!built.rows.length && !built.dupes) { toast("Couldn't find transactions in that file. Make sure it's a CSV from your bank."); return; }
-        pendingImport = { src: "csv", raw, flip: false, rows: built.rows, dupes: built.dupes }; render();
-      };
-      fr.readAsText(file);
-    },
+    importFile(el) { const files = Array.from(el.files || []); el.value = ""; importFiles(files); },
     goalPhoto(el) {
       const g = state.goals.find((x) => x.id === el.dataset.id);
       readPhoto(el.files && el.files[0], (url) => { g.photo = url; commit(icon("image") + " Photo added"); });
@@ -3214,6 +3268,9 @@
 
   function wire() {
     guardLookAround();
+    document.addEventListener("dragover", (e) => { const d = e.target.closest && e.target.closest("#importBox .drop"); if (d) { e.preventDefault(); d.classList.add("over"); } });
+    document.addEventListener("dragleave", (e) => { const d = e.target.closest && e.target.closest("#importBox .drop"); if (d) d.classList.remove("over"); });
+    document.addEventListener("drop", (e) => { const d = e.target.closest && e.target.closest("#importBox .drop"); if (!d) return; e.preventDefault(); d.classList.remove("over"); if (state.isExample) return lookNudge(); importFiles(e.dataTransfer && e.dataTransfer.files); });
     document.addEventListener("click", (e) => {
       const a = e.target.closest("[data-act]"); if (!a || a.disabled) return;
       const fn = ACT[a.dataset.act]; if (fn) { e.preventDefault(); fn(a, e); }

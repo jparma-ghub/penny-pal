@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.7",
+  version: "3.8",
   whatsNew: [
+    "📚 Import many statements and screenshots at once",
+    "✈️ New Travel category: purchases made outside Canada go there automatically",
     "📄 Import bank statements as PDFs or screenshots, not just CSV files",
     "🔁 Penny spots charges that repeat every month, adds them to Bills, and marks bills paid when they show up",
     "📺 Your bills and subscriptions now show up in your budget, in the right category",
@@ -331,6 +333,7 @@ window.CONFIG = {
     { id: "shopping", name: "Shopping", icon: "shopping-bag", color: "#e39bbd", group: "want", budget: 150 },
     { id: "subs", name: "Subscriptions", icon: "repeat", color: "#9d94ea", group: "want", budget: 50 },
     { id: "gifts", name: "Gifts", icon: "gift", color: "#dd8fa4", group: "want", budget: 40 },
+    { id: "travel", name: "Travel", icon: "plane", color: "#7cb8d6", group: "want", budget: 100 },
     { id: "emergency", name: "Emergency fund", icon: "umbrella", color: "#6cbab3", group: "save", budget: 200 },
     { id: "invest", name: "TFSA / RRSP", icon: "trending-up", color: "#5fae7c", group: "save", budget: 300 },
     { id: "pay", name: "Paycheque", icon: "briefcase", color: "#5fae7c", group: "income", budget: 0 },
