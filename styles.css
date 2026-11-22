@@ -694,7 +694,7 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
   @keyframes pp-ring { 0%, 55%, 100% { transform: rotate(0); } 60% { transform: rotate(-9deg); } 64% { transform: rotate(9deg); } 68% { transform: rotate(-9deg); } 72% { transform: rotate(9deg); } 76% { transform: rotate(-5deg); } 80% { transform: rotate(0); } }
   @keyframes pp-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
   @keyframes pp-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg) translateY(-3px); } }
-  @keyframes pp-poke { 0% { transform: scale(1); } 35% { transform: scale(1.15, .88) translateY(4px); } 65% { transform: scale(.94, 1.1) translateY(-12px); } 100% { transform: scale(1); } }
+  @keyframes pp-poke { 0% { transform: scale(1); } 35% { transform: scale(1.12, .9) translateY(4px); } 65% { transform: scale(.96, 1.05) translateY(-7px); } 100% { transform: scale(1); } }
 
   /* Calm mode: every Penny just breathes slowly */
   [data-calm] .mascot-img img { animation: pp-breathe 7s ease-in-out infinite !important; }
@@ -767,4 +767,26 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 @media (max-width: 560px) {
   .page-head > .row { flex: 1 1 100%; }
   .page-head > .row .btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* Give Penny room to bounce without slipping under the top bar */
+.page-head { padding-top: 22px; }
+.page-head .head-penny .mascot-img { margin-top: 0 !important; }
+@media (max-width: 560px) { .page-head { padding-top: 16px; } }
+/* Pictures that share the frame with a house or calculator get a little boost so Penny reads just as big */
+.page-head .mascot-img[data-pose="home"], .intro .mascot-img[data-pose="home"] { transform: scale(1.14); transform-origin: 50% 60%; }
+.page-head .mascot-img[data-pose="taxes"], .intro .mascot-img[data-pose="taxes"] { transform: scale(1.1); transform-origin: 50% 60%; }
+.page-head { padding-top: 36px; }
+.page-head .head-penny .mascot-img { margin-left: 0 !important; }
+@media (max-width: 560px) { .page-head { padding-top: 30px; } .page-head .head-penny .mascot-img { margin-left: 6px !important; } }
+@media (max-width: 560px) {
+  .path-hero { flex-wrap: nowrap; gap: 14px; align-items: center; }
+  .path-hero > .mascot-img { display: none; }
+  .path-hero > svg { width: 72px; height: 72px; }
+  .path-hero > div { flex: 1 1 0; min-width: 0; }
+}
+@media (max-width: 560px) {
+  .ci-card { flex-wrap: wrap; gap: 10px; }
+  .ci-card > div[style*="flex:1"] { flex: 1 1 200px !important; }
+  .ci-card > .btn, .ci-card > .row { flex: 1 1 100%; justify-content: center; }
 }
