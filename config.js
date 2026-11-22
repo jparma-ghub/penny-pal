@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.8",
+  version: "3.9",
   whatsNew: [
+    "🏦 Statements with funds out / funds in / balance columns (like TD) now read correctly. Balances are never counted",
+    "🏷️ Pick the category for each transaction before you import",
     "📚 Import many statements and screenshots at once",
     "✈️ New Travel category: purchases made outside Canada go there automatically",
     "📄 Import bank statements as PDFs or screenshots, not just CSV files",
