@@ -891,7 +891,7 @@
         '<div class="chips">' +
         (isNow ? (left > 0 ? '<span class="chip">🗓️ About ' + money(left / daysLeft) + " a day</span>" : '<span class="chip">💪 Small changes add up</span>') : "") +
         (bill ? '<span class="chip">🔔 ' + esc(bill.text.replace(/ charges .*/, "")) + " " + (billDays === 0 ? "today" : billDays === 1 ? "tomorrow" : "in " + billDays + " days") + "</span>" : "") +
-        "</div></div>" + '<div class="hero-side">' + monthNav() + '<div class="penny-speak">' + (line && pennyOn() ? '<div class="bubble-say">' + esc(line) + "</div>" : "") + mascot(110, null, mood.pose) + "</div>" + (mood.why ? '<div class="penny-why">' + esc(mood.why) + "</div>" : "") + "</div></div>" + (C.heroImage ? "" : skyline()) + "</section>" +
+        "</div></div>" + '<div class="hero-side">' + monthNav() + '<div class="penny-speak">' + (line && pennyOn() ? '<div class="bubble-say">' + esc(line) + "</div>" : "") + mascot(170, null, mood.pose) + "</div>" + (mood.why ? '<div class="penny-why">' + esc(mood.why) + "</div>" : "") + "</div></div>" + (C.heroImage ? "" : skyline()) + "</section>" +
 
         nextStepCard() +
 

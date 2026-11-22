@@ -702,3 +702,41 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 @media (max-width: 900px) {
   .topbar, .mobile-nav { margin-left: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); margin-right: calc(-1 * max(16px, env(safe-area-inset-right, 0px))); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: none; }
 }
+
+/* Home: Penny is the star of the banner */
+.hero .penny-speak .mascot-img { margin-right: 0; }
+.hero .penny-speak .mascot-img img { transform-origin: 50% 90%; }
+@media (prefers-reduced-motion: no-preference) { .hero .mascot-img img { animation: pp-float 4s ease-in-out infinite; } }
+.hero-side .bubble-say { margin-bottom: 70px; }
+@media (min-width: 561px) and (max-width: 900px) { .hero .penny-speak .mascot-img { width: 140px !important; height: 140px !important; } .hero .penny-speak .mascot-img img { width: 140px; height: 140px; } }
+@media (max-width: 560px) {
+  /* sky colour matches the top of the skyline picture, so there's no line where the picture starts */
+  .hero-photo { background:
+    linear-gradient(180deg, rgba(252, 246, 250, .35), rgba(252, 246, 250, .15) 55%, rgba(252, 246, 250, 0)),
+    var(--hero-img) 50% bottom / auto 46% no-repeat,
+    linear-gradient(180deg, #ece4f6, #dfddf4 52%) !important; }
+  .hero-photo.hero-night { background:
+    linear-gradient(180deg, rgba(44, 38, 78, .45), rgba(44, 38, 78, .15) 55%, rgba(44, 38, 78, 0)),
+    var(--hero-img) 50% bottom / auto 46% no-repeat,
+    linear-gradient(180deg, #6f6f98, #8389a8 52%) !important; }
+  .hero-side .penny-speak { flex-direction: column; align-items: center; gap: 0; }
+  .hero-side .penny-speak .bubble-say { flex: none; width: 100%; margin: 0 0 4px; border-radius: 18px; text-align: center; font-size: .86rem; position: relative; }
+  .hero-side .penny-speak .bubble-say::after { content: ""; position: absolute; bottom: -8px; left: 50%; width: 14px; height: 14px; background: var(--surface); border-right: 1.5px solid var(--line); border-bottom: 1.5px solid var(--line); transform: translateX(-50%) rotate(45deg); }
+  .hero .penny-speak .mascot-img { width: 210px !important; height: 210px !important; margin: 2px auto 0; }
+  .hero .penny-speak .mascot-img img { width: 210px; height: 210px; }
+  .hero-side .penny-why { align-self: center; margin-top: -4px; }
+}
+@media (max-width: 560px) {
+  .hero .penny-speak .mascot-img { width: 232px !important; height: 232px !important; }
+  .hero .penny-speak .mascot-img img { width: 232px; height: 232px; }
+  .hero-photo { background:
+    linear-gradient(180deg, rgba(252, 246, 250, .35), rgba(252, 246, 250, .15) 55%, rgba(252, 246, 250, 0)),
+    linear-gradient(180deg, rgba(223, 221, 244, 0) 46%, #dfddf4 54%, rgba(223, 221, 244, 0) 64%),
+    var(--hero-img) 50% bottom / auto 46% no-repeat,
+    linear-gradient(180deg, #ece4f6, #dfddf4 52%) !important; }
+  .hero-photo.hero-night { background:
+    linear-gradient(180deg, rgba(44, 38, 78, .45), rgba(44, 38, 78, .15) 55%, rgba(44, 38, 78, 0)),
+    linear-gradient(180deg, rgba(131, 137, 168, 0) 46%, #8389a8 54%, rgba(131, 137, 168, 0) 64%),
+    var(--hero-img) 50% bottom / auto 46% no-repeat,
+    linear-gradient(180deg, #6f6f98, #8389a8 52%) !important; }
+}
