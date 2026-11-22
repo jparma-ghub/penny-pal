@@ -168,6 +168,40 @@ The simplest free way: put the folder online with **Netlify Drop** (app.netlify.
 - **Safety checks:** files over 20 MB, empty files, broken pictures, locked PDFs and file types it can't read all show a friendly message instead of an error. If the same amount on the same date is already logged, you get a "this might be a repeat" warning.
 - **iPhone tip:** if a HEIC photo won't open, take a screenshot of the receipt, or set Settings, Camera, Formats to "Most Compatible".
 
+## Sync setup (phone + laptop)
+
+Sync uses Supabase, a free online database. You set it up once and everyone using your link (you and your friends) can sync. Each person signs in with their own email and only ever sees their own data.
+
+1. Go to **supabase.com**, sign up for free and press **New project**. Name it `penny-pal`, pick the **Canada (Central)** region and let it make a database password (you won't need it here).
+2. When it's ready, open **SQL Editor**, paste this and press **Run**:
+
+```sql
+create table if not exists public.penny_data (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.penny_data enable row level security;
+create policy "read own" on public.penny_data for select using (auth.uid() = user_id);
+create policy "add own" on public.penny_data for insert with check (auth.uid() = user_id);
+create policy "change own" on public.penny_data for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "delete own" on public.penny_data for delete using (auth.uid() = user_id);
+```
+
+3. Open **Authentication**, then **Sign In / Providers**, then **Email**. Turn **Confirm email** off (so people can sign in right away) and save.
+4. Open **Project Settings**, then **API Keys** (or **Data API**). Copy the **Project URL** and the **anon public** (or **publishable**) key into `sync` near the top of `config.js`.
+
+The anon key is safe to be public. The rules in step 2 are what keep everyone's data private.
+
+**How it behaves**
+
+- My Stash has a **Sync my phone and laptop** card. Create an account on one device, then sign in with the same email and password on the others.
+- Changes save to your account a couple of seconds after you make them, and other devices pick them up when you open or switch back to the app (and every minute while it's open).
+- If two devices change things at the same moment, the most recent change wins.
+- Offline? Changes wait on the device and sync when you're back online.
+- Sync works on the website. The preview inside Claude can't connect to outside servers, so it shows a link to the website instead.
+- Forgot your password? There's no reset button yet. You can delete the user in Supabase (Authentication, Users) and they can sign up again from a device that has their data.
+
 ## What it can't do (and why)
 
 - **Connect to your bank automatically.** Apps that do this pay companies like Plaid or Flinks per user. Bank CSV import gets you the same data for free.

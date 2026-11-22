@@ -740,3 +740,4 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
     var(--hero-img) 50% bottom / auto 46% no-repeat,
     linear-gradient(180deg, #6f6f98, #8389a8 52%) !important; }
 }
+.modal button.pick { font: inherit; color: inherit; cursor: pointer; }

@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "2.9",
+  version: "3.0",
   whatsNew: [
+    "☁️ Sync! Sign in on your phone and laptop and your data follows you (My Stash)",
+    "🐷 Penny is the big star on Home now",
     "🐷 Bigger Penny on every page, and she moves to match her picture. Tap her to say hi!",
     "📌 On phones, the top bar and page tabs stay put while you scroll",
     "⭐ Setup XP is now given at the end, only for the steps you actually fill in",
@@ -75,8 +77,17 @@ window.CONFIG = {
     learn: ["Piggy School", "Learn", "Bite-sized money lessons in plain English, made for Canada. Ace the quiz for XP. No snoozing (unless you're Penny)."],
     rewards: ["Truffle Trophies", "Rewards", "XP for good money habits. Tap any quest to jump right to it. Sow proud of you! 🐷"],
     reminders: ["Oink Alerts", "Reminders", "Bills, tax dates and your own notes for the next 12 months. Penny's got your back."],
-    mydata: ["My Stash", "My data", "Everything stays on this device. Nothing is sent anywhere, and nothing costs a penny."]
+    mydata: ["My Stash", "My data", "Your settings, backups and syncing between your phone and laptop. Nothing costs a penny."]
   },
+  // Sync between phone and laptop (Supabase). See "Sync setup" in GUIDE.md.
+  // Leave url empty to turn sync off. The anon key is meant to be public:
+  // the database rules only let each person read and change their own data.
+  sync: {
+    url: "",        // e.g. "https://abcdefgh.supabase.co"
+    anonKey: "",    // the "anon public" or "publishable" key
+    website: "https://jparma-ghub.github.io/penny-pal/"
+  },
+
   // The big welcome card each page shows the first time someone opens it.
   // The ? next to every page name opens it again. "say" is Penny's line, "points" are the 3 bullets.
   pageIntros: {
@@ -92,7 +103,7 @@ window.CONFIG = {
     learn: { say: "Time for piggy school! Short and sweet.", points: ["📚 Quick money lessons for Canada, in plain English", "❓ Each one ends with a tiny quiz", "⭐ Get it right for bonus XP"] },
     rewards: { say: "Look at all the stuff you can win!", points: ["🏆 Your level, XP, streak and badges", "🗓️ New weekly quests every Monday", "👆 Tap any quest and I'll take you right to it"] },
     reminders: { say: "I'll help you remember the important stuff!", points: ["🔔 Bills, tax dates and your own reminders", "📆 Looks a year ahead so nothing sneaks up on you", "✍️ Add your own, like \"call Rogers about my plan\""] },
-    mydata: { say: "This is where your stuff is kept safe.", points: ["💾 Everything stays on this device, nowhere else", "⬇️ Download a backup once a month to keep it extra safe", "⚙️ Settings and starting fresh live here too"] }
+    mydata: { say: "This is where your stuff is kept safe.", points: ["☁️ Turn on sync to see your data on your phone and laptop", "⬇️ Download a backup once a month to keep it extra safe", "⚙️ Settings and starting fresh live here too"] }
   },
   mascotName: "Penny",
   mascotStyle: "P",   // P = the 3D Penny pictures below (A to E are old hand-drawn backups)

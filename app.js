@@ -180,11 +180,8 @@
   }
 
   let state, freshVisit = false;
-  function load() {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const saved = JSON.parse(raw), base = blankState(), migrating = !saved.seenDefaults;
+  function normalize(saved) {
+    const base = blankState(), migrating = !saved.seenDefaults;
         if (migrating) saved.seenDefaults = { cats: [], rules: [] };
         for (const k of Object.keys(base)) if (saved[k] === undefined) saved[k] = base[k];
         defaultsAdded = syncDefaults(saved, migrating);
@@ -193,14 +190,18 @@
         if (saved.ui.setupDone === undefined) saved.ui.setupDone = !saved.isExample; // people from older versions already set things up
         for (const k of ["profile", "tax", "retire", "house", "ui", "path", "checkin"]) saved[k] = Object.assign(base[k], saved[k]);
         return saved;
-      }
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) return normalize(JSON.parse(raw));
     } catch (e) { /* blocked or broken storage: start fresh */ }
     freshVisit = true;
     return exampleState();
   }
   let saveWarned = false;
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); saveWarned = false; }
+    try { localStorage.setItem(KEY, JSON.stringify(state)); saveWarned = false; if (typeof syncChanged === "function") syncChanged(); }
     catch (e) { if (!saveWarned) { toast(icon("triangle-alert") + " Couldn't save. Your browser storage may be full. Try removing a goal photo."); saveWarned = true; } }
   }
 
@@ -1609,6 +1610,155 @@
     aiRead(text, null).then((ai) => finish(ai && ai.readable !== false ? checkAI(ai, text) : r)).catch(() => finish(r));
   }
 
+  /* ==================================================================
+     Sync across devices (Supabase)
+     - Sign in with the same email on your phone and laptop and your data
+       follows you. Each person only ever sees their own data (the
+       database rules in GUIDE.md make sure of that).
+     - The whole profile is saved as one record. The newest save wins.
+     - Turned off until C.sync.url and C.sync.anonKey are filled in.
+     ================================================================== */
+  const SYNC_KEY = "pennyPal.sync";
+  const SC = C.sync || {};
+  const syncReady = () => !!(SC.url && SC.anonKey) && !inFrame();
+  let sync = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) { return {}; } })();
+  let syncState = "idle", syncNote = "", syncTimer = null, syncBusy = false, applyingRemote = false, lastPushed = null;
+  const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch (e) { /* ignore */ } };
+  const signedIn = () => syncReady() && !!sync.refresh;
+  async function sb(path, opts, auth) {
+    const h = { apikey: SC.anonKey, "Content-Type": "application/json" };
+    if (opts && opts.headers) Object.assign(h, opts.headers);
+    if (auth !== false) { await sbToken(); h.Authorization = "Bearer " + sync.access; }
+    const r = await withTimeout(fetch(SC.url.replace(/\/+$/, "") + path, Object.assign({}, opts, { headers: h })), 20000, "timeout");
+    const txt = await r.text(); let body = null; try { body = txt ? JSON.parse(txt) : null; } catch (e) { body = txt; }
+    if (!r.ok) { const e = new Error((body && (body.msg || body.error_description || body.message || body.error)) || "HTTP " + r.status); e.status = r.status; e.code = body && (body.error_code || body.code); throw e; }
+    return body;
+  }
+  function takeSession(b) {
+    sync.access = b.access_token; sync.refresh = b.refresh_token; sync.exp = Date.now() + (b.expires_in || 3600) * 1000;
+    if (b.user) { sync.userId = b.user.id; sync.email = b.user.email || sync.email; }
+    saveSync();
+  }
+  async function sbToken() {
+    if (!sync.refresh) { const e = new Error("signed_out"); e.status = 401; throw e; }
+    if (sync.access && Date.now() < (sync.exp || 0) - 60000) return;
+    try { takeSession(await sb("/auth/v1/token?grant_type=refresh_token", { method: "POST", body: JSON.stringify({ refresh_token: sync.refresh }) }, false)); }
+    catch (e) { if (e.status === 400 || e.status === 401) { syncSignOut(true); e.message = "signed_out"; } throw e; }
+  }
+  function syncSignOut(expired) {
+    sync = { email: sync.email }; saveSync(); syncState = "idle"; lastPushed = null;
+    syncNote = expired ? "You were signed out. Sign in again to keep syncing." : "";
+    if (pageId() === "mydata") render();
+  }
+  const sbRow = async () => { const rows = await sb("/rest/v1/penny_data?select=data,updated_at&user_id=eq." + encodeURIComponent(sync.userId)); return rows && rows[0] ? rows[0] : null; };
+  function shareable() { const copy = JSON.parse(JSON.stringify(state)); if (copy.ui) delete copy.ui.weather; return copy; }
+  async function sbPush() {
+    const data = shareable(), json = JSON.stringify(data), at = new Date().toISOString();
+    await sb("/rest/v1/penny_data?on_conflict=user_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: sync.userId, data, updated_at: at }) });
+    sync.seen = at; sync.dirty = false; saveSync(); lastPushed = json;
+  }
+  function applyRemote(row, quiet) {
+    const keepWeather = state.ui && state.ui.weather;
+    applyingRemote = true;
+    try { state = normalize(row.data); if (keepWeather) state.ui.weather = keepWeather; checkIn(); applyTheme(); evaluate(); save(); }
+    finally { applyingRemote = false; }
+    sync.seen = row.updated_at; sync.dirty = false; saveSync(); lastPushed = JSON.stringify(shareable());
+    if (!$("#wizard")) render();
+    if (!quiet) toast("☁️ Updated with your latest changes from your other device");
+  }
+  function syncChanged() {
+    if (applyingRemote || !signedIn()) return;
+    if (state.isExample) return; // example data stays on this device
+    if (lastPushed !== null && JSON.stringify(shareable()) === lastPushed) return;
+    sync.dirty = true; sync.editedAt = Date.now(); saveSync();
+    clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 2500);
+  }
+  async function syncNow(manual) {
+    if (!signedIn() || syncBusy) return;
+    if (!navigator.onLine) { syncState = "offline"; if (manual) toast("You're offline. Penny will sync when you're back online."); return; }
+    syncBusy = true; syncState = "syncing"; if (pageId() === "mydata" && manual) render();
+    try {
+      const row = await sbRow();
+      if (row && row.updated_at !== sync.seen) {
+        // someone else (your other device) saved since we last looked
+        const theirs = Date.parse(row.updated_at) || 0;
+        if (!sync.dirty || theirs > (sync.editedAt || 0)) applyRemote(row);
+        else await sbPush();
+      } else if (sync.dirty || !row) {
+        if (!state.isExample) await sbPush();
+      }
+      syncState = "ok"; syncNote = ""; sync.lastSync = Date.now(); saveSync();
+      if (manual) toast(icon("check") + " All synced");
+    } catch (e) {
+      syncState = e.message === "signed_out" ? "idle" : "error";
+      syncNote = e.message === "signed_out" ? syncNote : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
+      if (manual) toast(esc(syncNote || "Couldn't sync right now"));
+    } finally { syncBusy = false; if (pageId() === "mydata") render(); }
+  }
+  async function syncFirstLink() {
+    // just signed in: decide whose data wins
+    const row = await sbRow();
+    const local = state, localHas = !local.isExample && (local.transactions.length || local.goals.length || local.profile.name || (local.tax && local.tax.income));
+    if (!row) { sync.seen = null; if (!local.isExample) { await sbPush(); toast("☁️ Your data is now saved to your account"); } return; }
+    if (!localHas) { applyRemote(row, true); toast("☁️ Welcome back! Your data is here"); return; }
+    if (JSON.stringify(row.data) === JSON.stringify(shareable())) { sync.seen = row.updated_at; saveSync(); return; }
+    const r = row.data || {}, n = (x) => (x && x.length) || 0;
+    window.__syncChoice = row;
+    openModal('<div class="stack"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(90, "P", "thinking") : "") + '<div><h2>Which data should Penny keep?</h2><p class="small muted">This device and your account both have data. Pick one. The other one gets replaced.</p></div></div>' +
+      '<div class="grid g2"><button class="pick" data-act="syncKeepAccount"><span class="pick-emoji">☁️</span><b>My account</b><span class="tiny muted">' + n(r.transactions) + " transactions, " + n(r.goals) + " goals<br>Saved " + esc(new Date(row.updated_at).toLocaleString(C.locale)) + "</span></button>" +
+      '<button class="pick" data-act="syncKeepDevice"><span class="pick-emoji">💻</span><b>This device</b><span class="tiny muted">' + n(local.transactions) + " transactions, " + n(local.goals) + " goals</span></button></div>" +
+      '<p class="tiny muted">Not sure? Pick the one with more of your real stuff. You can download a backup of this device first in My Stash.</p></div>');
+  }
+  async function syncAuth(kind, email, password) {
+    email = String(email || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { syncNote = "That email doesn't look right."; return render(); }
+    if (String(password || "").length < 8) { syncNote = "Use a password with at least 8 characters."; return render(); }
+    syncState = "syncing"; syncNote = ""; render();
+    try {
+      const b = kind === "signup"
+        ? await sb("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }) }, false)
+        : await sb("/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) }, false);
+      if (!b || !b.access_token) { syncState = "idle"; sync.email = email; saveSync(); syncNote = "Almost there! Check your email for a confirmation link, then come back and sign in."; return render(); }
+      takeSession(b); sync.dirty = false; sync.seen = null;
+      await syncFirstLink();
+      syncState = "ok"; sync.lastSync = Date.now(); saveSync();
+      if (kind === "signup") { award(25, "Sync turned on"); celebrate("track", { emoji: "☁️", title: "Sync is on!", sub: "Sign in with the same email on your other devices and everything follows you." }); }
+      else toast(icon("check") + " Signed in. Sync is on");
+    } catch (e) {
+      syncState = "idle";
+      const m = String(e.message || "");
+      syncNote = /invalid login|invalid_credentials|invalid grant/i.test(m + e.code) ? "That email and password don't match. Try again, or create an account first." :
+        /already registered|already been registered|user_already_exists/i.test(m + e.code) ? "There's already an account with that email. Press Sign in instead." :
+        /not confirmed|email_not_confirmed/i.test(m + e.code) ? "Please confirm your email first (check your inbox), then sign in." :
+        e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Check your internet and try again." : "Something went wrong: " + m;
+    }
+    render();
+  }
+  function syncCard() {
+    if (!(SC.url && SC.anonKey)) return "";
+    const ago = (t) => { if (!t) return "not yet"; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago"; };
+    let body;
+    if (inFrame()) body = '<p class="small">Syncing between your phone and laptop works on the Penny Pal website' + (SC.website ? ': <a href="' + esc(SC.website) + '" target="_blank" rel="noopener">' + esc(SC.website.replace(/^https?:\/\//, "")) + "</a>" : "") + '. This preview inside Claude can\'t connect to it.</p>';
+    else if (signedIn()) body = '<div class="callout">' + icon("check") + '<div><b>Sync is on</b> for ' + esc(sync.email || "your account") + '.<br><span class="small muted">Last synced ' + ago(sync.lastSync) + (syncState === "syncing" ? " · syncing..." : "") + "</span></div></div>" +
+      (syncNote ? '<p class="small" style="color:var(--warn)">' + esc(syncNote) + "</p>" : "") +
+      '<p class="small muted">Sign in with this same email on your other phone or laptop and everything follows you. If two devices change things at the same time, the most recent change wins.</p>' +
+      '<div class="row"><button class="btn" data-act="syncNow">' + icon("refresh-cw") + ' Sync now</button><button class="btn ghost" data-act="syncSignOut">Sign out</button></div>';
+    else body = '<p class="small">Use the same email and password on your phone and laptop, and Penny keeps them matched automatically. Only you can see your data.</p>' +
+      (syncNote ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(syncNote) + "</div></div>" : "") +
+      '<form data-form="syncSignIn" class="stack" autocomplete="on">' + field("Email", '<input type="email" name="email" autocomplete="email" required value="' + esc(sync.email || "") + '" placeholder="you@example.com">') +
+      field("Password", '<input type="password" name="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters">') +
+      '<div class="row"><button class="btn" name="kind" value="signin"' + (syncState === "syncing" ? " disabled" : "") + ">Sign in</button><button class=\"btn ghost\" name=\"kind\" value=\"signup\"" + (syncState === "syncing" ? " disabled" : "") + '>Create account</button></div></form>' +
+      '<p class="tiny muted">New here? Press Create account. Already made one on another device? Press Sign in.</p>';
+    return '<div class="card stack sync-card"><h2>☁️ Sync my phone and laptop</h2>' + body + "</div>";
+  }
+  function startSync() {
+    if (!syncReady()) return;
+    if (signedIn()) syncNow();
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(); else if (sync.dirty) syncNow(); });
+    window.addEventListener("online", () => syncNow());
+    setInterval(() => { if (document.visibilityState === "visible") syncNow(); }, 60000);
+  }
+
   /* PAGE: Transactions ----------------------------------------------- */
   let pendingImport = null;
   PAGES.spending = {
@@ -2010,15 +2160,15 @@
     render() {
       let size = 0; try { size = (localStorage.getItem(KEY) || "").length; } catch (e) { size = 0; }
       return '<div class="page">' + head("My data", "Everything stays in this browser. Nothing is sent anywhere, and nothing costs money.") +
-        '<div class="grid g2"><div class="card stack"><h2>' + icon("smile") + " You</h2>" + field("What should we call you?", '<input data-bind="profile.name" value="' + esc(state.profile.name) + '" placeholder="Your first name">') +
+        syncCard() + '<div class="grid g2"><div class="card stack"><h2>' + icon("smile") + " You</h2>" + field("What should we call you?", '<input data-bind="profile.name" value="' + esc(state.profile.name) + '" placeholder="Your first name">') +
         '<label class="check"><input type="checkbox" data-change="calmMode"' + (state.ui.calm ? " checked" : "") + '> Calm mode: no moving animations, softer pop-ups 🍃</label>' +
         '<label class="check"><input type="checkbox" data-change="celebrate"' + (state.ui.celebrate !== false ? " checked" : "") + '> Celebrations: confetti and pop-ups when you save 🎉</label>' +
         "</div>" +
-        '<div class="card stack"><h2>' + icon("download") + ' Back up</h2><p class="small muted">Your data lives only in this browser. Clearing browser history or switching computers will lose it. Back up once a month.</p>' +
+        '<div class="card stack"><h2>' + icon("download") + ' Back up</h2><p class="small muted">' + (signedIn() ? "Sync is on, so your data is also saved to your account. A backup file is still a nice extra safety net." : "Your data lives only in this browser. Clearing browser history or switching computers will lose it. Back up once a month.") + "</p>" +
         '<div class="row"><button class="btn" data-act="backup">' + icon("download") + ' Download backup</button><button class="btn ghost" data-act="exportCsv">' + icon("receipt") + " Transactions as CSV</button></div>" +
         '<label class="field">Restore a backup<input type="file" accept=".json,application/json" data-change="restore"></label><p class="tiny muted">Using about ' + Math.round(size / 1024) + " KB of roughly 5,000 KB browsers allow. Photos use the most.</p></div></div>" +
         '<div class="card stack"><h2>' + icon("refresh-cw") + ' Start over</h2>' + (resetArmed && pennyOn() ? '<div class="row" style="flex-wrap:nowrap">' + mascot(80, "P", "sad") + '<p class="small"><b>Are you sure?</b> ' + esc(C.mascotName || "Penny") + " will miss all your hard work. Download a backup first!</p></div>" : "") + '<div class="row">' + (state.isExample ? '<button class="btn gold" data-act="clearExample">Clear example data</button>' : "") +
-        '<button class="btn danger" data-act="reset">' + (resetArmed ? "Press again to erase everything" : "Erase everything") + '</button></div><p class="small muted">Erasing keeps nothing: transactions, goals, XP, all of it. Download a backup first.</p></div>' +
+        '<button class="btn danger" data-act="reset">' + (resetArmed ? "Press again to erase everything" : "Erase everything") + '</button></div><p class="small muted">Erasing keeps nothing: transactions, goals, XP, all of it. Download a backup first.' + (signedIn() ? " Sync is on, so this also erases it on your other devices." : "") + "</p></div>" +
         '<div class="card stack"><h2>🐷 Setup</h2><p class="small">Want to walk through the 10 setup questions again? Your answers fill in what\'s already there.</p><div class="row"><button class="btn ghost" data-act="openWizard">Run the setup again</button></div></div>' +
         '<div class="card stack"><h2>' + icon("heart") + " Sharing with friends</h2><p class=\"small\">Send someone the link (or the app folder). Everyone gets their own private profile on their own device. Nobody can see anyone else's numbers. When the app gets updated, everyone gets the new features and keeps everything they've entered.</p></div>" +
         '<div class="card stack"><h2>' + icon("pencil") + ' Make it your own</h2><p class="small">This app is just a few plain files you can open in any text editor. Open <b>config.js</b> to change tax numbers, categories, auto-sort rules, lessons, quests, badges and the calendar. Open <b>styles.css</b> to change colors. The <b>GUIDE.md</b> file walks you through it.</p></div></div>';
@@ -2189,6 +2339,10 @@
      Button actions
      ================================================================== */
   const ACT = {
+    syncNow() { syncNow(true); },
+    syncSignOut() { syncSignOut(false); toast("Signed out. Your data is still on this device."); },
+    syncKeepAccount() { const row = window.__syncChoice; window.__syncChoice = null; closeModal(); if (row) applyRemote(row, true); toast("☁️ Using your account's data"); },
+    syncKeepDevice() { window.__syncChoice = null; closeModal(); sbPush().then(() => { toast("☁️ This device's data is now saved to your account"); render(); }).catch(() => toast("Couldn't save to your account right now. Try Sync now in a minute.")); },
     pennyPoke(el) { const m = el.querySelector(".mascot-img"); if (!m) return; m.classList.remove("poked"); void m.offsetWidth; m.classList.add("poked"); },
     pageHelp() { showPageIntro(pageId()); },
     scanReceipt() { scanModal(); },
@@ -2335,6 +2489,7 @@
     return { rows, dupes: all.length - rows.length };
   }
   const FORM = {
+    syncSignIn(f, d, e) { const kind = (e && e.submitter && e.submitter.value) || "signin"; syncAuth(kind, d.email, d.password); },
     receiptText(f, d) { handleReceiptText(d.text || ""); },
     saveReceipt(f, d) {
       const amount = Math.abs(num(d.amount)); if (!amount) { toast("Type the total amount first"); return; }
@@ -2466,10 +2621,7 @@
       fr.onload = () => {
         try {
           const s = JSON.parse(String(fr.result)); if (!s || !Array.isArray(s.transactions) || !s.profile) throw new Error("bad");
-          const migrating = !s.seenDefaults; if (migrating) s.seenDefaults = { cats: [], rules: [] };
-          const base = blankState(); for (const k of Object.keys(base)) if (s[k] === undefined) s[k] = base[k];
-          syncDefaults(s, migrating);
-          state = s; applyTheme(); save(); render(); toast(icon("check") + " Backup restored");
+          state = normalize(s); applyTheme(); save(); render(); toast(icon("check") + " Backup restored");
         } catch (e) { toast("That file isn't a Penny Pal backup."); }
       };
       fr.readAsText(file);
@@ -2487,7 +2639,7 @@
     });
     document.addEventListener("submit", (e) => {
       const f = e.target.closest("form[data-form]"); if (!f) return;
-      e.preventDefault(); const fn = FORM[f.dataset.form]; if (fn) fn(f, formData(f));
+      e.preventDefault(); const fn = FORM[f.dataset.form]; if (fn) fn(f, formData(f), e);
     });
     document.addEventListener("change", (e) => {
       const el = e.target.closest("[data-change]"); if (el && CHG[el.dataset.change]) CHG[el.dataset.change](el, e);
@@ -2526,6 +2678,7 @@
   render();
   save();
   checkSnow();
+  startSync();
   (function pinTabs() {
     const tb = $("#topbar"); if (!tb) return;
     const setH = () => document.documentElement.style.setProperty("--tb-h", tb.offsetHeight + "px");
