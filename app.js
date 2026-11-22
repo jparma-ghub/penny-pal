@@ -54,7 +54,7 @@
   const bubble = (name, color, size) => '<span class="bubble" style="background:color-mix(in srgb,' + color + ' 16%,transparent);color:' + color + (size ? ";width:" + size + "px;height:" + size + "px" : "") + '">' + icon(name) + "</span>";
   const PERIODS = { weekly: 52, biweekly: 26, semimonthly: 24, monthly: 12 };
   const PERIOD_NAMES = { weekly: "Every week", biweekly: "Every 2 weeks", semimonthly: "Twice a month", monthly: "Once a month" };
-  const GROUPS = { need: "Need", want: "Want", save: "Savings", income: "Income" };
+  const GROUPS = { need: "Need", want: "Want", save: "Savings", income: "Income", transfer: "Moving money" };
 
   /* ------------------------------------------------------------------
      State: what gets saved
@@ -209,6 +209,19 @@
     const h = s.house || {};
     if (h.price === 750000 && h.monthlySave === 800) Object.assign(h, { price: 0, monthlySave: 0, monthlyCosts: h.monthlyCosts === 650 ? 0 : h.monthlyCosts });
   }
+  function movePass(s) {
+    if (!s || s.isExample || (s.flags && s.flags.movePass)) return;
+    if (!(s.categories || []).some((c) => c.id === "transfer")) return;
+    s.flags = s.flags || {}; s.flags.movePass = true;
+    const me = String((s.profile && s.profile.name) || "").trim().split(/\s+/)[0];
+    (s.transactions || []).forEach((t) => {
+      if (t.recatOn || t.example) return;
+      const d = String(t.desc || "");
+      const own = me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d);
+      if (own || TRANSFER_RX.test(d)) t.cat = "transfer";
+      else if (t.kind === "income" && (t.cat === "pay" || t.cat === "other") && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) t.cat = "payback";
+    });
+  }
   function travelPass(s) {
     if (!s || s.isExample || (s.flags && s.flags.travelPass)) return;
     if (!(s.categories || []).some((c) => c.id === "travel")) return;
@@ -220,7 +233,7 @@
     purgeExample(saved); clearMadeUpDefaults(saved);
         if (migrating) saved.seenDefaults = { cats: [], rules: [] };
         for (const k of Object.keys(base)) if (saved[k] === undefined) saved[k] = base[k];
-        defaultsAdded = syncDefaults(saved, migrating); travelPass(saved);
+        defaultsAdded = syncDefaults(saved, migrating); travelPass(saved); movePass(saved);
         migratePalette(saved);
         if (!saved.ui || !saved.ui.seenVersion) { saved.ui = saved.ui || {}; saved.ui.seenVersion = "1"; }
         if (saved.ui.setupDone === undefined) saved.ui.setupDone = !saved.isExample; // people from older versions already set things up
@@ -432,16 +445,19 @@
   function monthStats(ym) {
     const tx = state.transactions.filter((t) => t.date.startsWith(ym));
     const byCat = {};
-    let income = 0, spent = 0, savedTx = 0;
+    let income = 0, spent = 0, savedTx = 0, paidBack = 0, moved = 0;
     for (const t of tx) {
       const c = catById(t.cat);
+      if (c.group === "transfer") { moved += +t.amount; continue; }      // your own money moving: not spending, not income
+      if (t.kind === "income" && c.offset) { paidBack += +t.amount; continue; } // a friend paying you back: lowers spending
       if (t.kind === "income") { income += +t.amount; continue; }
       byCat[c.id] = (byCat[c.id] || 0) + +t.amount;
       if (c.group === "save") savedTx += +t.amount; else spent += +t.amount;
     }
     let goalIn = 0;
     for (const g of state.goals) for (const h of g.history || []) if (h.date.startsWith(ym)) goalIn += +h.amount;
-    return { tx, byCat, income, spent, saved: savedTx + goalIn, savedTx, goalIn };
+    spent = Math.max(0, spent - paidBack);
+    return { tx, byCat, income, spent, saved: savedTx + goalIn, savedTx, goalIn, paidBack, moved };
   }
   // Which budget category a bill belongs to (phone bills to Phone & internet, gym to Health and so on)
   function billCat(sub) {
@@ -464,11 +480,11 @@
   }
   // Every category in one dropdown, grouped. Picking a "Money in" category makes the row money in.
   function catOptions(sel) {
-    const groups = [["need", "Needs"], ["want", "Wants"], ["save", "Savings"], ["income", "Money in"]];
+    const groups = [["need", "Needs"], ["want", "Wants"], ["save", "Savings"], ["income", "Money in"], ["transfer", "Moving money"]];
     return groups.map(([g, label]) => { const cs = state.categories.filter((c) => c.group === g); return cs.length ? '<optgroup label="' + label + '">' + cs.map((c) => '<option value="' + c.id + '"' + (c.id === sel ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</optgroup>" : ""; }).join("") +
       '<option value="other"' + (sel === "other" ? " selected" : "") + ">Other</option>";
   }
-  const kindForCat = (id, fallback) => { const c = state.categories.find((x) => x.id === id); return c ? (c.group === "income" ? "income" : "expense") : fallback; };
+  const kindForCat = (id, fallback) => { const c = state.categories.find((x) => x.id === id); return c ? (c.group === "transfer" ? fallback : c.group === "income" ? "income" : "expense") : fallback; };
   function budgetTotals() {
     const g = { need: 0, want: 0, save: 0 };
     for (const c of state.categories) if (g[c.group] !== undefined) g[c.group] += +c.budget || 0;
@@ -778,6 +794,16 @@
     return null;
   }
   // Why Penny picked a category (shown in "Sort my Other")
+  const TRANSFER_RX = /\b(TRANSFER (TO|FROM)|TFR[- ]?(TO|FR)|ONLINE TRANSFER|INTERNET TRANSFER|MB[- ]?TRANSFER|WWW TRF|TRF (TO|FROM)|BANK TRANSFER|ACCOUNT TRANSFER|INTER-?ACCOUNT|(TO|FROM) (SAVINGS|CHEQUING|CHECKING|TFSA|HISA)|PAYMENT ?- ?THANK YOU|PAYMENT THANK YOU|PAYMENT RECEIVED|CREDIT CARD PAYMENT|(VISA|MASTERCARD|AMEX) PAYMENT|PAIEMENT)\b/i;
+  const ETRANSFER_IN = /E-?TRANSFER (RECEIVED|DEPOSIT|RCVD|FROM|RECV)|E-?TFR (RCVD|IN)|AUTODEPOSIT|AUTO-DEPOSIT|INTERAC E-?TRANSFER(?!.*\b(SEND|SENT)\b)/i;
+  function moneyMove(desc, kind) {
+    const d = String(desc || "");
+    const me = String((state.profile && state.profile.name) || "").trim().split(/\s+/)[0];
+    if (me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d)) return { cat: "transfer", why: "an e-transfer with your own name, so it's your money moving" };
+    if (TRANSFER_RX.test(d)) return { cat: "transfer", why: "it looks like money moving between your own accounts" };
+    if (kind === "income" && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) return { cat: "payback", why: "an e-transfer from someone, like a friend paying you back" };
+    return null;
+  }
   function explainCat(desc, kind) {
     const up = desc.toUpperCase() + " " + normDesc(desc);
     if (kind !== "income" && state.categories.some((c) => c.id === "travel") && looksForeign(desc)) return { cat: "travel", why: "looks like it was outside Canada" };
@@ -785,6 +811,8 @@
     const builtIn = new Set((C.autoRules || []).map(([m, c]) => (m + "|" + c).toUpperCase()));
     let best = null;
     for (const r of state.rules) if (r.match && up.includes(r.match.toUpperCase())) { const c = state.categories.find((x) => x.id === r.cat); if (c && (kind === "income") === (c.group === "income")) { const mine = !builtIn.has((r.match + "|" + r.cat).toUpperCase()); if (mine) return { cat: c.id, why: "your rule \"" + r.match + "\"" }; if (!best || r.match.length > best.match.length) best = r; } }
+    const mv = moneyMove(desc, kind);
+    if (mv && state.categories.some((c) => c.id === mv.cat)) return mv;
     const g = guideCat(desc, kind);
     if (best && !(g && g.why.length > best.match.length)) return { cat: best.cat, why: "Penny knows \"" + best.match + "\"" };
     if (g) return { cat: g.cat, why: "Penny knows \"" + g.why + "\"" };
@@ -2651,7 +2679,10 @@
       tx.sort((a, b) => b.date.localeCompare(a.date));
       const m = monthStats(ym);
       // totals for exactly what's shown (this month, or everything you've entered)
-      const shownIn = tx.filter((t) => t.kind === "income").reduce((a, t) => a + +t.amount, 0), shownOut = tx.filter((t) => t.kind !== "income").reduce((a, t) => a + +t.amount, 0);
+      const grpOf = (t) => catById(t.cat);
+      const shownBack = tx.filter((t) => t.kind === "income" && grpOf(t).offset).reduce((a, t) => a + +t.amount, 0);
+      const shownIn = tx.filter((t) => t.kind === "income" && grpOf(t).group !== "transfer" && !grpOf(t).offset).reduce((a, t) => a + +t.amount, 0);
+      const shownOut = Math.max(0, tx.filter((t) => t.kind !== "income" && grpOf(t).group !== "transfer").reduce((a, t) => a + +t.amount, 0) - shownBack);
       const total = tx.length, limit = all ? txLimit : Infinity, cut = tx.length > limit;
       const showTx = cut ? tx.slice(0, limit) : tx;
       const byDay = {}; for (const t of showTx) (byDay[t.date] = byDay[t.date] || []).push(t);
@@ -3231,7 +3262,7 @@
       '<div class="row"><button class="btn">' + icon("check") + (isNew ? " Add it" : " Save") + '</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>');
   }
   function catPick(kind, sel) {
-    const cats = state.categories.filter((c) => (kind === "income") === (c.group === "income")).concat(kind === "income" ? [] : [OTHER]);
+    const cats = state.categories.filter((c) => c.group === "transfer" || (kind === "income") === (c.group === "income")).concat(kind === "income" ? [] : [OTHER]);
     if (!cats.some((c) => c.id === sel)) sel = cats[0] && cats[0].id;
     return cats.map((c) => '<label><input type="radio" name="cat" value="' + c.id + '"' + (c.id === sel ? " checked" : "") + '><span style="color:' + c.color + '">' + icon(c.icon) + "</span>" + esc(c.name) + "</label>").join("");
   }

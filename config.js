@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "4.6",
+  version: "4.7",
   whatsNew: [
+    "🤝 New: Friends paying me back (lowers your spending instead of counting as income)",
+    "🔁 New: Interbank transfer for moving your own money. It never counts as spending or income",
     "🛟 New safety net calculator: see how much you need for 3 months, 6 months or a year, and how long your savings would last",
     "👛 Tap See transactions on any budget to see what's in it, and move anything to another category right there",
     "📚 See and search all your transactions at once with the new All time view",
@@ -119,7 +121,7 @@ window.CONFIG = {
      Longer names win, so "COSTCO GAS" goes to transit even though "COSTCO" is groceries. */
   merchantGuide: {
     groceries: ["LOBLAWS", "NO FRILLS", "NOFRILLS", "METRO", "SOBEYS", "FRESHCO", "FOOD BASICS", "FORTINOS", "ZEHRS", "REAL CANADIAN SUPERSTORE", "RCSS", "SUPERSTORE", "COSTCO", "COSTCO WHOLESALE", "T&T", "T & T", "T AND T", "LONGOS", "LONGO'S", "FARM BOY", "WHOLE FOODS", "WHOLEFDS", "SAFEWAY", "SAVE ON FOODS", "IGA", "MAXI", "PROVIGO", "INDEPENDENT GROCER", "YOUR INDEPENDENT", "VALU-MART", "VALUMART", "FOODLAND", "H MART", "NATIONS FRESH", "ADONIS", "GALLERIA SUPERMARKET", "PUSATERI", "HIGHLAND FARMS", "BULK BARN", "INSTACART", "VOILA", "PC EXPRESS", "WALMART SUPERCENTRE GROCERY", "FIESTA FARMS", "OCEANS FRESH", "BTRUST", "SUPERMARKET", "GROCERY", "GROCERIES"],
-    dining: ["UBER EATS", "UBEREATS", "UBER *EATS", "DOORDASH", "SKIP THE DISHES", "SKIPTHEDISHES", "RITUAL", "FANTUAN", "MCDONALD", "MCDONALDS", "BURGER KING", "WENDY'S", "WENDYS", "A&W", "HARVEY'S", "HARVEYS", "KFC", "POPEYES", "SUBWAY", "PIZZA PIZZA", "DOMINO'S", "DOMINOS", "PIZZA HUT", "PAPA JOHN", "LITTLE CAESARS", "PIZZA NOVA", "CHIPOTLE", "FRESHII", "OSMOW", "MARY BROWN", "SWISS CHALET", "BOSTON PIZZA", "EAST SIDE MARIO", "THE KEG", "MONTANA'S", "KELSEY'S", "JACK ASTOR", "MILESTONES", "EARLS", "CACTUS CLUB", "JOEY", "MOXIES", "ST-HUBERT", "BURRITO BOYZ", "MUCHO BURRITO", "FIVE GUYS", "CHICK-FIL-A", "TACO BELL", "NANDO", "PANERA", "DENNY'S", "IHOP", "SMASHBURGER", "PHO", "SUSHI", "RAMEN", "SHAWARMA", "PIZZERIA", "RESTAURANT", "BISTRO", "TAQUERIA", "DIM SUM", "BBQ", "KITCHEN", "DINER", "EATERY", "BAKERY", "PATISSERIE"],
+    dining: ["UBER EATS", "UBEREATS", "UBER *EATS", "DOORDASH", "SKIP THE DISHES", "SKIPTHEDISHES", "RITUAL", "FANTUAN", "MCDONALD", "MCDONALDS", "BURGER KING", "WENDY'S", "WENDYS", "A&W", "HARVEY'S", "HARVEYS", "KFC", "POPEYES", "SUBWAY", "PIZZA PIZZA", "DOMINO'S", "DOMINOS", "PIZZA HUT", "PAPA JOHN", "LITTLE CAESARS", "PIZZA NOVA", "CHIPOTLE", "FRESHII", "OSMOW", "MARY BROWN", "SWISS CHALET", "BOSTON PIZZA", "EAST SIDE MARIO", "THE KEG", "MONTANA'S", "KELSEY'S", "JACK ASTOR", "MILESTONES", "EARLS", "CACTUS CLUB", "JOEY", "MOXIES", "ST-HUBERT", "BURRITO BOYZ", "MUCHO BURRITO", "FIVE GUYS", "CHICK-FIL-A", "TACO BELL", "NANDO", "PANERA", "DENNY'S", "IHOP", "SMASHBURGER", "PHO", "THAI", "SUSHI", "RAMEN", "SHAWARMA", "PIZZERIA", "RESTAURANT", "BISTRO", "TAQUERIA", "DIM SUM", "BBQ", "KITCHEN", "DINER", "EATERY", "BAKERY", "PATISSERIE"],
     coffee: ["TIM HORTONS", "TIMS", "TIMHORTONS", "STARBUCKS", "SECOND CUP", "BALZAC", "PILOT COFFEE", "DINEEN", "CAFE", "CAFFE", "COFFEE", "ESPRESSO", "KRISPY KREME", "CHATIME", "COCO FRESH", "GONG CHA", "THE ALLEY", "PRESOTEA", "BUBBLE TEA", "DAVIDSTEA", "MCCAFE"],
     transit: ["PRESTO", "TTC", "GO TRANSIT", "METROLINX", "UP EXPRESS", "UBER TRIP", "UBER *TRIP", "UBER CANADA/UBERTRIP", "LYFT", "BECK TAXI", "TAXI", "PARKING", "GREEN P", "IMPARK", "INDIGO PARK", "HONK MOBILE", "PRECISE PARKLINK", "PETRO-CANADA", "PETRO CANADA", "ESSO", "SHELL", "ULTRAMAR", "PIONEER", "HUSKY", "CHEVRON", "CANADIAN TIRE GAS", "CDN TIRE GAS", "COSTCO GAS", "MOBIL", "407 ETR", "BIKE SHARE", "ZIPCAR", "COMMUNAUTO", "ENTERPRISE RENT", "BUDGET RENT", "MIWAY", "YRT", "VIVA", "BRAMPTON TRANSIT", "DRT", "OC TRANSPO", "STM"],
     utilities: ["TORONTO HYDRO", "ALECTRA", "HYDRO ONE", "ENBRIDGE", "ELEXICON", "HYDRO OTTAWA", "LONDON HYDRO", "ENERCARE", "RELIANCE HOME", "UTILITY", "UTILITIES", "WATER BILL", "CITY OF TORONTO", "HYDRO"],
@@ -132,7 +134,7 @@ window.CONFIG = {
     gifts: ["FLORIST", "FLOWERS", "1-800-FLOWERS", "HALLMARK", "GIFT CARD", "GIFT SHOP", "GIFTS"],
     rent: ["RENT", "LANDLORD", "PROPERTY MANAGEMENT", "PROPERTY MGMT", "MORTGAGE", "CONDO FEES", "MAINTENANCE FEE", "TENANT"],
     invest: ["WEALTHSIMPLE", "QUESTRADE", "QTRADE", "TD DIRECT INVESTING", "RBC DIRECT INVESTING", "INTERACTIVE BROKERS", "MOOMOO", "NATIONAL BANK DIRECT", "TFSA", "RRSP", "FHSA", "INVESTMENT", "MUTUAL FUND", "GIC"],
-    emergency: ["TRANSFER TO SAVINGS", "TO SAVINGS", "HISA", "HIGH INTEREST SAVINGS", "EQ BANK", "TANGERINE SAVINGS", "EMERGENCY FUND"],
+    emergency: ["EMERGENCY FUND"],
     // money coming in
     gov: ["CRA", "CANADA REVENUE", "CANADA RE", "GST CREDIT", "HST CREDIT", "GST/HST", "CANADA CHILD", "CCB", "EMPLOYMENT INSURANCE", "EI CANADA", "CANADA PENSION", "OLD AGE SECURITY", "TRILLIUM", "ONTARIO TRILLIUM", "CLIMATE ACTION", "CARBON REBATE", "CANADA CARBON", "TAX REFUND", "REFUND", "RETURN", "REVERSAL", "REBATE", "CASHBACK", "CASH BACK", "OSAP", "SCHOLARSHIP", "BURSARY"],
     pay: ["PAYROLL", "SALARY", "DIRECT DEP", "DIRECT DEPOSIT", "PAY CHEQUE", "PAYCHEQUE", "WAGES"],
@@ -375,7 +377,11 @@ window.CONFIG = {
     { id: "invest", name: "TFSA / RRSP", icon: "trending-up", color: "#5fae7c", group: "save", budget: 300 },
     { id: "pay", name: "Paycheque", icon: "briefcase", color: "#5fae7c", group: "income", budget: 0 },
     { id: "side", name: "Side hustle", icon: "sparkles", color: "#e3b45f", group: "income", budget: 0 },
-    { id: "gov", name: "Refunds & benefits", icon: "landmark", color: "#7aa6d9", group: "income", budget: 0 }
+    { id: "gov", name: "Refunds & benefits", icon: "landmark", color: "#7aa6d9", group: "income", budget: 0 },
+    // offset: true = not income. It lowers your spending instead (a friend paying back their share)
+    { id: "payback", name: "Friends paying me back", icon: "hand-coins", color: "#e3b45f", group: "income", offset: true, budget: 0 },
+    // group "transfer" = moving your own money between accounts. Not spending, not income
+    { id: "transfer", name: "Interbank transfer", icon: "refresh-cw", color: "#a3abbd", group: "transfer", budget: 0 }
   ],
 
 
