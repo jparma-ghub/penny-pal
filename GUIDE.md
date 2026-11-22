@@ -207,7 +207,12 @@ create policy "read own" on public.penny_data for select using (auth.uid() = use
 create policy "add own" on public.penny_data for insert with check (auth.uid() = user_id);
 create policy "change own" on public.penny_data for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "delete own" on public.penny_data for delete using (auth.uid() = user_id);
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.penny_data to authenticated;
+revoke all on public.penny_data from anon;
 ```
+
+(The two `grant` lines matter on newer Supabase projects, which don't give signed-in users access to new tables automatically. Without them, sync says "permission denied for table penny_data".)
 
 3. Open **Authentication**, then **Sign In / Providers**, then **Email**. Turn **Confirm email** off (so people can sign in right away) and save.
 4. Open **Project Settings**, then **API Keys** (or **Data API**). Copy the **Project URL** and the **anon public** (or **publishable**) key into `sync` near the top of `config.js`.

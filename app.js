@@ -181,8 +181,25 @@
   }
 
   let state, freshVisit = false;
+  // Example data must never mix with someone's real data: strip anything that came with the example
+  function purgeExample(s) {
+    if (!s || s.isExample) return 0;
+    let n = 0;
+    for (const k of ["transactions", "subs", "goals", "accounts", "netHistory", "credit", "reminders"]) {
+      if (!Array.isArray(s[k])) continue;
+      const keep = s[k].filter((x) => !(x && x.example === true)); n += s[k].length - keep.length; s[k] = keep;
+    }
+    const t = s.tax || {};
+    if (t.income === 68000 && t.withheldPerPay === 370 && t.rentPaid === 22800 && t.fhsa === 8000) { s.tax = blankState().tax; n++; }
+    const r = s.retire || {};
+    if (r.age === 28 && r.balance === 6200 && r.monthly === 250) { s.retire = blankState().retire; n++; }
+    const h = s.house || {};
+    if (h.saved === 12400 && h.monthlySave === 900) { s.house = blankState().house; n++; }
+    return n;
+  }
   function normalize(saved) {
     const base = blankState(), migrating = !saved.seenDefaults;
+    purgeExample(saved);
         if (migrating) saved.seenDefaults = { cats: [], rules: [] };
         for (const k of Object.keys(base)) if (saved[k] === undefined) saved[k] = base[k];
         defaultsAdded = syncDefaults(saved, migrating);
@@ -1729,7 +1746,7 @@
       if (manual) toast(icon("check") + " All synced");
     } catch (e) {
       syncState = e.message === "signed_out" ? "idle" : e.message === "wrong_key" || e.message === "need_key" ? "needkey" : "error";
-      syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
+      syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : /permission denied|42501|row-level security/i.test(e.message + " " + (e.code || "")) ? "Sync isn't fully switched on at the server yet (database permissions). Your data is safe on this device and will sync once it's fixed." : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
       if (manual) toast(esc(syncNote || "Couldn't sync right now"));
     } finally { syncBusy = false; if (pageId() === "mydata") render(); }
   }
@@ -1799,7 +1816,6 @@
       const b = await authCall(kind, email, password);
       wzAuthBusy = false;
       if (!b || !b.access_token) { sync.email = email; saveSync(); wzAuthMode = "signin"; wzAuthMsg = "Almost there! Check your email for a confirmation link, then sign in here."; return renderAccountStep(); }
-      if (state.isExample) state.isExample = false; // leaving look-around mode
       takeSession(b); sync.dirty = false; sync.seen = null; sync.lastSync = Date.now(); await setKey(password); syncState = "ok";
       const row = await sbRow().catch(() => null);
       if (row && row.data) { // returning person on a new device: bring their stuff over and skip setup
