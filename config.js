@@ -30,8 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "2.7",
+  version: "2.8",
   whatsNew: [
+    "⭐ Setup XP is now given at the end, only for the steps you actually fill in",
     "🗼 A brand new Toronto skyline, day and night, with the CN Tower front and center",
     "❓ Every page now has a ? next to its name. Tap it and Penny explains what the page is for",
     "📸 Scan receipts! Snap a photo, pick a PDF bill or paste an emailed receipt on the Transoinktions page",
@@ -165,11 +166,11 @@ window.CONFIG = {
         fields: [{ type: "money", path: "tax.income", label: "Yearly income", placeholder: "e.g. 55000" }] },
       { id: "pay", pose: "thinking", emoji: "📅", title: "How often do you get paid?", sub: "This helps us work out your paycheques and tax refund.",
         fields: [{ type: "choice", path: "tax.payFrequency", options: [["weekly", "Every week", "🗓️"], ["biweekly", "Every 2 weeks", "📆"], ["semimonthly", "Twice a month", "✌️"], ["monthly", "Once a month", "🌙"]] }] },
-      { id: "home", pose: "cozy", emoji: "🏠", title: "What do you pay for rent or housing each month?", sub: "Rent, mortgage, or what you give your family. Put 0 if nothing.",
+      { id: "home", pose: "home", emoji: "🏠", title: "What do you pay for rent or housing each month?", sub: "Rent, mortgage, or what you give your family. Put 0 if nothing.",
         fields: [{ type: "money", path: "cat.rent", label: "Per month", placeholder: "e.g. 1800" }] },
-      { id: "basics", pose: "happy", emoji: "🛒", title: "Your everyday basics", sub: "About how much each month? Guesses are perfect. You'll fine-tune later.",
+      { id: "basics", pose: "taxes", emoji: "🛒", title: "Your everyday basics", sub: "About how much each month? Guesses are perfect. You'll fine-tune later.",
         fields: [{ type: "money", path: "cat.groceries", label: "🛒 Groceries" }, { type: "money", path: "cat.transit", label: "🚇 TTC, transit or gas" }, { type: "money", path: "cat.phone", label: "📱 Phone and internet" }, { type: "money", path: "cat.utilities", label: "💡 Hydro and utilities" }] },
-      { id: "fun", pose: "celebrate", emoji: "🎉", title: "And the fun stuff", sub: "Treats matter too! About how much each month?",
+      { id: "fun", pose: "party", emoji: "🎉", title: "And the fun stuff", sub: "Treats matter too! About how much each month?",
         fields: [{ type: "money", path: "cat.dining", label: "🍜 Eating out and takeout" }, { type: "money", path: "cat.coffee", label: "☕ Coffee" }, { type: "money", path: "cat.fun", label: "🎟️ Going out" }, { type: "money", path: "cat.shopping", label: "🛍️ Shopping" }] },
       { id: "subs", pose: "surprised", emoji: "📺", title: "Which of these do you pay for?", sub: "Tap all that apply. We filled in typical prices. You can fix them anytime on Bills & subs.",
         fields: [{ type: "subs", options: [["Netflix", 18.99, "film", "🎬"], ["Spotify", 11.99, "music", "🎧"], ["Crave", 22.99, "tv", "📺"], ["Disney+", 14.99, "film", "🏰"], ["Amazon Prime", 9.99, "shopping-bag", "📦"], ["YouTube Premium", 13.99, "tv", "▶️"], ["iCloud or Google storage", 3.99, "laptop", "☁️"], ["Gym", 50, "dumbbell", "🏋️"]] }] },
@@ -177,7 +178,7 @@ window.CONFIG = {
         fields: [{ type: "money", path: "acct.cc", label: "💳 Credit cards" }, { type: "money", path: "acct.osap", label: "🎓 OSAP or student loans" }, { type: "money", path: "acct.carloan", label: "🚗 Car loan" }, { type: "money", path: "acct.loc", label: "🏦 Line of credit" }] },
       { id: "savings", pose: "coin", emoji: "🐷", title: "What do you have saved so far?", sub: "Every dollar counts, even $0 is a fine place to start!",
         fields: [{ type: "money", path: "acct.savings", label: "🐷 Savings account" }, { type: "money", path: "acct.tfsa", label: "🌱 TFSA" }, { type: "money", path: "acct.rrsp", label: "🌅 RRSP" }, { type: "money", path: "acct.fhsa", label: "🔑 FHSA" }] },
-      { id: "goal", pose: "proud", emoji: "🎯", title: "Last one! Pick your first goal", sub: "Something exciting to save for. You can add more later.",
+      { id: "goal", pose: "jar", emoji: "🎯", title: "Last one! Pick your first goal", sub: "Something exciting to save for. You can add more later.",
         fields: [{ type: "goal" }] }
     ]
   },

@@ -1143,9 +1143,27 @@
       }
     }
   }
+  // Setup XP: a step only counts when the person actually typed or picked something.
+  // Nothing is awarded until the whole setup is finished, so clicking Next/Back earns nothing.
+  document.addEventListener("input", (e) => { const f = e.target.closest && e.target.closest("#wzForm"); if (f) f.dataset.touched = "1"; });
+  document.addEventListener("click", (e) => { const f = e.target.closest && e.target.matches("input") && e.target.closest("#wzForm"); if (f) f.dataset.touched = "1"; });
+  function wzHasAnswer(st, form) {
+    const fd = new FormData(form);
+    return st.fields.some((f) =>
+      f.type === "text" || f.type === "money" ? String(fd.get(f.path) || "").trim() !== "" :
+      f.type === "choice" ? !!fd.get(f.path) : f.type === "subs" ? fd.getAll("sub").length > 0 :
+      f.type === "goal" ? fd.get("goalTpl") !== null && num(fd.get("goalTarget")) > 0 : false);
+  }
   function wzAdvance(apply) {
     const steps = C.setup.steps, i = state.ui.setupStep || 0, st = steps[i];
-    if (apply) { applyWizardStep(st, $("#wzForm")); award(C.setup.xpPerStep, "Setup step", true); }
+    state.ui.setupFilled = state.ui.setupFilled || {};
+    const form = $("#wzForm");
+    if (apply && form) {
+      const answered = wzHasAnswer(st, form);
+      if (!answered) delete state.ui.setupFilled[st.id];
+      else if (form.dataset.touched) state.ui.setupFilled[st.id] = true;
+      applyWizardStep(st, form);
+    }
     state.ui.setupStep = i + 1;
     const leftN = steps.length - (i + 1);
     wzMsg = leftN === 1 ? C.setup.lastOne : leftN === Math.floor(steps.length / 2) ? C.setup.halfway : C.setup.cheers[i % C.setup.cheers.length].replace("{left}", leftN);
@@ -1153,9 +1171,13 @@
     if (leftN > 0) { burst(["✨", "⭐", "💛"], 7, 0.55); renderWizard(); }
     else finishWizard();
   }
+  let wzReward = null;
   function finishWizard() {
     state.ui.setupDone = true; state.ui.setupStep = C.setup.steps.length;
-    award(C.setup.xpFinish, "Setup complete!", true);
+    const filled = C.setup.steps.filter((st) => (state.ui.setupFilled || {})[st.id]).length, all = filled === C.setup.steps.length;
+    const earned = filled * C.setup.xpPerStep + (all ? C.setup.xpFinish : 0), owed = earned - (state.ui.setupXpGiven || 0);
+    if (owed > 0) { state.ui.setupXpGiven = earned; award(owed, all ? "Setup complete!" : "Setup: " + filled + " steps filled in", true); }
+    wzReward = { filled, earned: Math.max(0, owed), all };
     evaluate(); save(); render(); renderWizardDone(); confetti();
   }
   function renderWizardDone() {
@@ -1168,7 +1190,9 @@
     el.innerHTML = '<div class="wz-inner wz-center">' + mascot(170, null, "celebrate") + "<h1>You did it" + (state.profile.name ? ", " + esc(state.profile.name) : "") + "! 🎉</h1>" +
       '<p class="wz-sub">Your money home is ready. That was the hardest part, and you\'re done. Seriously, be proud. 💛</p>' +
       (chips.length ? '<div class="wz-chips">' + chips.map((c) => '<span class="pill">' + esc(c) + "</span>").join("") + "</div>" : "") +
-      '<p class="small" style="color:var(--warn);font-weight:700">+' + (C.setup.xpFinish + C.setup.xpPerStep * C.setup.steps.length) + " XP earned</p>" +
+      (function () { const r = wzReward || { filled: 0, earned: 0, all: false }, n = C.setup.steps.length, full = C.setup.xpFinish + C.setup.xpPerStep * n;
+        return r.earned > 0 ? '<p class="small" style="color:var(--warn);font-weight:700">+' + r.earned + " XP earned" + (r.all ? "" : " for " + r.filled + " of " + n + " steps") + "</p>" + (r.all ? "" : '<p class="tiny muted">Fill in every step (My Stash, then Run the setup again) to unlock the full ' + full + " XP.</p>") :
+          '<p class="tiny muted">No XP yet. Answer the setup questions (My Stash, then Run the setup again) to earn up to ' + full + " XP.</p>"; })() +
       '<div class="stack" style="width:100%;max-width:360px"><button class="btn big-btn" data-act="wzHome">Take me home 🏡</button><button class="btn ghost" data-act="wzCheckin">Try the 1-minute money check-in ✨</button></div></div>';
   }
 
