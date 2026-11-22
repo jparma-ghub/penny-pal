@@ -30,9 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and REPLACE whatsNew with only that update's changes.
   // People who already use the app see a "What's new" popup once. Keep it short.
-  version: "4.9",
+  version: "5.0",
   whatsNew: [
-    "🔁 E-transfers to a person (even one with your name) now stay as normal spending. Interbank transfer is only picked for clear transfers like \"TRANSFER TO SAVINGS\" or a credit card payment",
+    "🔍 Uploaded something twice? Penny now flags possible duplicates and leaves them unticked. If one is really a new purchase, tick it to keep it",
+    "🔁 E-transfers to a person (even one with your name) stay as normal spending. Interbank transfer is only for clear transfers and credit card payments",
   ],
   locale: "en-CA",
   currency: "CAD",

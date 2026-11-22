@@ -2805,21 +2805,49 @@
     return cat;
   }
   const CARD_PAYMENT = /payment.*thank|thank you.*payment|payment received|paiement|autopay(ment)?|pre-?authorized payment/i;
-  function buildFromBase(base, flips) {
-    flips = flips === true ? { all: true } : flips || {};
-    const have = new Set(state.transactions.map((t) => t.date + "|" + t.desc + "|" + (+t.amount).toFixed(2)));
-    const all = base.map((r) => { const a = flips.all || flips[r.file] ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind), file: r.file }; });
-    // the same transaction in two overlapping statements only counts once
-    const seenInBatch = {};
-    const rows = all.filter((r) => {
-      const k = r.date + "|" + r.desc + "|" + r.amount.toFixed(2);
-      if (have.has(k)) return false;
-      if (seenInBatch[k] !== undefined && seenInBatch[k] !== r.file) return false;
-      seenInBatch[k] = r.file; return true;
-    }).sort((a, b) => b.date.localeCompare(a.date));
-    // paying off a credit card isn't income: start those unticked
-    const skip = {}; rows.forEach((r, i) => { if (r.kind === "income" && CARD_PAYMENT.test(r.desc)) skip[i] = true; });
-    return { rows, dupes: all.length - rows.length, skip };
+  /* Possible duplicates: the same amount, dates up to 3 days apart (pending vs posted),
+     and a name that matches or nearly matches (a screenshot can read it a bit differently).
+     They're shown and flagged, never dropped, so you decide. */
+  const DUPE_GENERIC = new Set(["INTERAC", "TRANSFER", "SEND", "SENT", "PAYMENT", "PURCHASE", "ONLINE", "BANKING", "DEBIT", "CREDIT", "CARD", "VISA", "POS", "THE", "AND", "TORONTO", "CANADA", "STORE"]);
+  function dupeWords(d) { return String(d || "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !DUPE_GENERIC.has(w) && !/^\d+$/.test(w)); }
+  function looksSame(a, b) {
+    if (Math.abs(+a.amount - +b.amount) > 0.005) return null;
+    const days = Math.abs(parseISO(a.date) - parseISO(b.date)) / 86400000;
+    if (days > 3.5) return null;
+    const exact = String(a.desc).trim().toUpperCase() === String(b.desc).trim().toUpperCase();
+    if (exact && days < 0.5) return "exact"; // even if you flipped it to money in or out after saving
+    if (a.kind !== b.kind) return null;
+    if (exact) return "close";
+    const ka = merchantKey(a.desc), kb = merchantKey(b.desc);
+    if (ka && kb && (ka === kb || sameMerchant(ka, kb))) return "close";
+    const wa = dupeWords(a.desc), wb = new Set(dupeWords(b.desc));
+    if (wa.some((w) => wb.has(w))) return "close";
+    // no name in common, but the exact same amount on the exact same day with a short name read
+    if (days < 0.5 && (!wa.length || !wb.size)) return "close";
+    return null;
+  }
+  function buildFromBase(base, flips, keep) {
+    flips = flips === true ? { all: true } : flips || {}; keep = keep || {};
+    const all = base.map((r, bi) => { const a = flips.all || flips[r.file] ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind), file: r.file, bi }; });
+    // each saved transaction can only "use up" one imported row
+    const used = new Set(), accepted = [];
+    // exact matches first, so a near match can't take a saved transaction that has an exact twin
+    for (const r of all) for (const t of state.transactions) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t) === "exact") { used.add(t.id); r.dupe = { desc: t.desc, date: t.date, how: "exact", where: "saved" }; break; } }
+    all.forEach((r) => {
+      if (r.dupe) return;
+      let hit = null;
+      for (const t of state.transactions) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t)) { hit = t; break; } }
+      if (hit) { used.add(hit.id); r.dupe = { desc: hit.desc, date: hit.date, how: "close", where: "saved" }; return; }
+      // the same row in two overlapping files (rows within one file are never flagged against each other)
+      const twin = accepted.find((x) => x.file !== r.file && !x.twinned && looksSame(r, x));
+      if (twin) { twin.twinned = true; r.dupe = { desc: twin.desc, date: twin.date, how: "close", where: "file" }; return; }
+      accepted.push(r);
+    });
+    const rows = all.sort((a, b) => b.date.localeCompare(a.date));
+    rows.forEach((r) => delete r.twinned);
+    // possible duplicates and credit card payments start unticked (tick to keep them)
+    const skip = {}; rows.forEach((r, i) => { if (keep[r.bi]) return; if (r.dupe || (r.kind === "income" && CARD_PAYMENT.test(r.desc))) skip[i] = true; });
+    return { rows, dupes: rows.filter((r) => r.dupe).length, skip };
   }
 
   let txLimit = 300;
@@ -2894,13 +2922,14 @@
     if (pendingImport) {
       const p = pendingImport;
       return '<div class="card-head"><h2>' + icon("upload") + " Check your import</h2></div>" +
-        "<p>Found <b>" + p.rows.length + "</b> transactions" + (p.dupes ? ", skipping <b>" + p.dupes + "</b> " + (p.files && p.files.length > 1 ? "that are already in Penny or show up in more than one file" : "you already have") : "") + ". Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
+        "<p>Found <b>" + p.rows.length + "</b> transactions. Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
+        (p.dupes ? '<div class="callout gold small dupe-callout">' + icon("copy") + "<div><b>" + p.dupes + (p.dupes === 1 ? " looks like a duplicate" : " look like duplicates") + "</b> of " + (p.dupes === 1 ? "a transaction" : "transactions") + " you already have" + (p.files && p.files.length > 1 ? " (or that show up in more than one file)" : "") + ". " + (p.dupes === 1 ? "It starts" : "They start") + " unticked so nothing gets counted twice. If one is really a separate purchase, tick it to keep it.</div></div>" : "") +
         (p.src === "ai" || p.src === "ocr" ? '<div class="callout gold small">' + icon("info") + "<div>Penny read these from a picture, so please double check the dates and amounts.</div></div>" : p.src === "pdf" ? '<div class="callout small">' + icon("info") + "<div>Read from your PDF statement. Quick check before importing!</div></div>" : "") +
         (p.files && p.files.length > 1 ? '<p class="small">From <b>' + p.files.length + " files</b>: " + p.files.map(esc).join(", ") + "</p>" : "") +
         (p.errors && p.errors.length ? '<div class="callout red small">' + icon("triangle-alert") + "<div><b>Couldn't read " + p.errors.length + (p.errors.length === 1 ? " file" : " files") + ":</b> " + p.errors.map((x) => esc(x.name) + " (" + esc(x.msg) + ")").join("; ") + "</div></div>" : "") +
         '<div class="table-wrap import-table" style="margin:12px 0"><table><thead><tr><th></th><th>Date</th><th>Description</th><th>Category</th>' + (p.files && p.files.length > 1 ? "<th>From</th>" : "") + '<th class="r">Amount</th></tr></thead><tbody>' +
         (p.rows.some((t, i) => (p.skip || {})[i] && CARD_PAYMENT.test(t.desc)) ? '<p class="tiny muted">💳 Credit card payments start unticked: paying off your card isn\'t new money, it\'s already counted when you spent it.</p>' : "") +
-        p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + "</td><td><select class=\"import-cat\" data-change=\"importCat\" data-i=\"" + i + "\" aria-label=\"Category\">" + catOptions(t.cat) + "</select></td>" + (p.files && p.files.length > 1 ? '<td class="tiny muted">' + esc(p.files[t.file] || "") + "</td>" : "") + '<td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
+        p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + (t.dupe ? " is-dupe" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + (t.dupe ? '<div class="dupe-note tiny">⚠️ ' + (t.dupe.how === "exact" ? "Duplicate of" : "Looks like") + ' <b>' + esc(t.dupe.desc) + "</b> on " + esc(t.dupe.date) + (t.dupe.where === "file" ? " in another file" : " (already in Penny)") + ". Tick to keep it anyway.</div>" : "") + "</td><td><select class=\"import-cat\" data-change=\"importCat\" data-i=\"" + i + "\" aria-label=\"Category\">" + catOptions(t.cat) + "</select></td>" + (p.files && p.files.length > 1 ? '<td class="tiny muted">' + esc(p.files[t.file] || "") + "</td>" : "") + '<td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
         "</tbody></table></div>" +
         balanceSection(p) +
         '<div class="callout">' + icon("info") + "<div>Spending should show as minus and paycheques as plus. If it's backwards (common with credit card files), press Flip.</div></div>" +
@@ -3611,14 +3640,15 @@
     flipImport(el) {
       const p = pendingImport; if (!p) return;
       const f = el && el.dataset.file !== undefined ? +el.dataset.file : "all";
-      p.flips = p.flips || {}; p.flips[f] = !p.flips[f]; p.skip = {};
-      Object.assign(p, buildFromBase(p.base, p.flips)); render();
+      p.flips = p.flips || {}; p.flips[f] = !p.flips[f];
+      p.keep = p.keep || {}; p.rows.forEach((r, i) => { if (r.dupe && !(p.skip || {})[i]) p.keep[r.bi] = true; });
+      Object.assign(p, buildFromBase(p.base, p.flips, p.keep)); render();
     },
     flipRow(el) { const r = pendingImport && pendingImport.rows[+el.dataset.i]; if (!r) return; r.kind = r.kind === "income" ? "expense" : "income"; if (!r.picked || kindForCat(r.cat, r.kind) !== r.kind) r.cat = statementCat(r.desc, r.kind); render(); },
     cancelImport() { pendingImport = null; render(); },
     doImport() {
       const skip = pendingImport.skip || {};
-      const rows = pendingImport.rows.filter((r, i) => !skip[i]).map((r) => { const t = Object.assign({ id: uid(), added: todayISO(), src: "import" }, r); delete t.picked; delete t.file; if (r.picked) t.recatOn = todayISO(); return t; });
+      const rows = pendingImport.rows.filter((r, i) => !skip[i]).map((r) => { const t = Object.assign({ id: uid(), added: todayISO(), src: "import" }, r); delete t.picked; delete t.file; delete t.bi; delete t.dupe; if (r.picked) t.recatOn = todayISO(); return t; });
       state.transactions.push(...rows); state.flags.imported = true; state.flags.importOn = todayISO();
       if (rows.length) state.ui.month = rows.map((r) => r.date).sort().pop().slice(0, 7);
       const paid = markBillsPaid(rows);

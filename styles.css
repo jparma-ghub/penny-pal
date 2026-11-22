@@ -917,3 +917,10 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .ef-row .btn { align-self: flex-start; }
 @media (max-width: 760px) { .ef-rows { grid-template-columns: 1fr; } }
 .pct-in input { padding-left: 10px !important; }
+
+/* Possible duplicates in the import review */
+.dupe-note { color: #9a6a12; margin-top: 3px; line-height: 1.35; }
+.import-table tr.skipped.is-dupe td { text-decoration: none; opacity: .7; }
+.import-table tr.is-dupe td { background: color-mix(in srgb, #f5c86b 12%, transparent); }
+:root[data-theme="dark"] .dupe-note { color: #f2c46b; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dupe-note { color: #f2c46b; } }
