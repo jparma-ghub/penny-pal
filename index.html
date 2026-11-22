@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Penny Pal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="styles.css">
+<!--
+  PENNY PAL: a free, friendly budget, tax and savings app for Ontario.
+  Open this file in any browser. No install, no account, no fees.
+
+  Files:
+    index.html   this page (the frame)
+    styles.css   colours and layout
+    config.js    numbers, categories, lessons, quests  <- edit this one most
+    icons.js     the icon set
+    app.js       the engine
+    GUIDE.md     how to use and change everything
+-->
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="logo"><span class="mark"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5c-1.5 0-2.8 1.4-3 2-3.5-1.5-11-.3-11 5 0 1.8 0 3 2 4.5V20h4v-2h3v2h4v-4c1-.5 1.7-1 2-2h2v-4h-2c0-1-.5-1.5-1-2V5z"/><path d="M2 9v1c0 1.1.9 2 2 2h1"/><path d="M16 11h.01"/></svg></span><b>Penny Pal</b></div>
+    <nav class="nav" id="sideNav" aria-label="Pages"></nav>
+    <div class="side-foot tiny muted">Made for Ontario. Free forever.<br>Your data stays on this device.</div>
+  </aside>
+  <main class="main">
+    <div class="topbar" id="topbar"></div>
+    <nav class="mobile-nav" id="mobileNav" aria-label="Pages"></nav>
+    <div id="view"></div>
+  </main>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+<script src="config.js"></script>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
