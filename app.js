@@ -604,7 +604,7 @@
   /* Recurring charges: find what repeats every month and link payments to your bills */
   const KNOWN_SUBS = /netflix|spotify|disney|crave|apple\.com\/bill|apple ?music|icloud|google ?(storage|one)|youtube|amazon ?prime|prime ?video|audible|patreon|adobe|microsoft|xbox|playstation|nintendo|chatgpt|openai|dropbox|canva|duolingo|rogers|bell (canada|mobility)?|telus|fido|koodo|freedom mobile|virgin plus|public mobile|goodlife|fit4less|planet fitness|anytime fitness|uber ?one|doordash ?pass|skip ?plus|paramount|hayu|britbox/i;
   function merchantKey(desc) {
-    return String(desc || "").toUpperCase()
+    return String(desc || "").toUpperCase().replace(/^\s*(SQ|TST|PP|SP|IZ|FS|CKO|PAYPAL|LS|BT|DD|WPY|SUMUP|CLV|ZTL)\s?\*\s*/, "")
       .replace(/^(INTERAC|CONTACTLESS|ONLINE BANKING|PRE-?AUTHORI[ZS]ED|POS|PURCHASE|DEBIT|PAYMENT|BILL PAYMENT|PAD|E-?TRANSFER SENT|RECURRING)\b[\s\-:]*/g, "")
       .replace(/\b(INTERAC|CONTACTLESS|PURCHASE|PAYMENT|ONLINE|BANKING|PRE-?AUTHORI[ZS]ED|TORONTO|MISSISSAUGA|VANCOUVER|ON|CA|CAN)\b/g, " ")
       .replace(/[#*]?\d[\d\-./]*/g, " ").replace(/\.(COM|CA|NET)\b/g, "").replace(/[^A-Z&+ ]/g, " ").replace(/\s+/g, " ").trim().slice(0, 28);
@@ -721,15 +721,42 @@
     if (/\b(ON|QC|BC|AB|MB|SK|NS|NB|NL|PE|YT|NT|NU|CANADA|CAN)\s*$/.test(up) && !FOREIGN_RX[0].test(up) && !FOREIGN_RX[5].test(desc)) return false; // a Canadian place
     return FOREIGN_RX.some((rx) => rx.test(rx.flags.includes("i") ? desc : up));
   }
-  function autoCat(desc, kind) {
-    const up = desc.toUpperCase();
-    if (kind !== "income" && state.categories.some((c) => c.id === "travel") && looksForeign(desc)) return "travel";
-    for (const r of state.rules) {
-      if (r.match && up.includes(r.match.toUpperCase())) {
-        const c = state.categories.find((x) => x.id === r.cat);
-        if (c && (kind === "income") === (c.group === "income")) return c.id;
-      }
+  // The merchant guide in config.js: longest name wins, matched on whole words
+  const normDesc = (t) => " " + String(t || "").toUpperCase().replace(/[^A-Z0-9&]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+  let GUIDE = null;
+  function guideList() {
+    if (GUIDE) return GUIDE;
+    GUIDE = [];
+    Object.entries(C.merchantGuide || {}).forEach(([cat, names]) => names.forEach((n) => { const k = normDesc(n); if (k.trim()) GUIDE.push({ k, cat, name: n }); }));
+    GUIDE.sort((a, b) => b.k.length - a.k.length);
+    return GUIDE;
+  }
+  function guideCat(desc, kind) {
+    const d = normDesc(desc), wantIncome = kind === "income";
+    for (const g of guideList()) {
+      if (!d.includes(g.k)) continue;
+      const c = state.categories.find((x) => x.id === g.cat);
+      if (c && (c.group === "income") === wantIncome) return { cat: c.id, why: g.name.trim() };
     }
+    return null;
+  }
+  // Why Penny picked a category (shown in "Sort my Other")
+  function explainCat(desc, kind) {
+    const up = desc.toUpperCase() + " " + normDesc(desc);
+    if (kind !== "income" && state.categories.some((c) => c.id === "travel") && looksForeign(desc)) return { cat: "travel", why: "looks like it was outside Canada" };
+    // rules you made always win; Penny's built-in rules lose to a more specific name in the merchant guide
+    const builtIn = new Set((C.autoRules || []).map(([m, c]) => (m + "|" + c).toUpperCase()));
+    let best = null;
+    for (const r of state.rules) if (r.match && up.includes(r.match.toUpperCase())) { const c = state.categories.find((x) => x.id === r.cat); if (c && (kind === "income") === (c.group === "income")) { const mine = !builtIn.has((r.match + "|" + r.cat).toUpperCase()); if (mine) return { cat: c.id, why: "your rule \"" + r.match + "\"" }; if (!best || r.match.length > best.match.length) best = r; } }
+    const g = guideCat(desc, kind);
+    if (best && !(g && g.why.length > best.match.length)) return { cat: best.cat, why: "Penny knows \"" + best.match + "\"" };
+    if (g) return { cat: g.cat, why: "Penny knows \"" + g.why + "\"" };
+    if (kind !== "income") { const w = guessCategory("", desc); if (w.cat !== "other") return { cat: w.cat, why: w.why }; }
+    return null;
+  }
+  function autoCat(desc, kind) {
+    const e = explainCat(String(desc || ""), kind);
+    if (e) return e.cat;
     if (kind === "income") return (state.categories.find((c) => c.group === "income") || OTHER).id;
     return "other";
   }
@@ -2558,6 +2585,23 @@
     return { rows, dupes: all.length - rows.length, skip };
   }
 
+  /* Batch select on the Transactions list */
+  let selMode = false; const selIds = new Set(); window.__lastShown = [];
+  function sortOtherModal(tips, left) {
+    openModal('<div class="stack"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(90, "P", "thinking") : "") + '<div><h2>✨ Sort my Other</h2><p class="small muted">' + (tips.length ? "Penny has ideas for <b>" + tips.length + "</b> of them. Check each one, change anything, then tap Sort." : "Penny couldn't figure these out from the names.") + "</p></div></div>" +
+      (tips.length ? '<div class="sort-list">' + tips.map((x, i) => '<div class="sort-row" data-i="' + i + '"><input type="checkbox" checked aria-label="Use this"><div class="grow"><div class="t">' + esc(x.t.desc) + '</div><div class="tiny muted">' + esc(x.t.date) + " · " + money2(x.t.amount) + " · " + esc(x.e.why) + '</div></div><select aria-label="Category">' + catOptions(x.e.cat) + "</select></div>").join("") + "</div>" : "") +
+      (left.length ? '<p class="small muted">' + left.length + " still unsure" + (left.length <= 8 ? ": " + left.map((t) => esc(t.desc)).join(", ") : "") + ". You can select them on the list and move them together." + "</p>" : "") +
+      '<div class="row">' + (tips.length ? '<button class="btn" data-act="sortOtherApply">' + icon("check") + " Sort " + tips.length + "</button>" : "") + (left.length && inFrame() ? '<button class="btn soft" data-act="sortOtherAI">Ask Claude about the rest</button>' : "") + '<button class="btn ghost" data-close>Close</button></div></div>');
+  }
+  function selectBar(shown) {
+    window.__lastShown = shown.map((t) => t.id);
+    const n = selIds.size;
+    return '<div class="sel-bar"><label class="check small"><input type="checkbox" data-change="selAll"' + (shown.length && shown.every((t) => selIds.has(t.id)) ? " checked" : "") + "> Select all " + shown.length + " shown</label>" +
+      '<span class="small"><b>' + n + "</b> selected</span>" +
+      '<span class="row" style="gap:6px;flex-wrap:wrap"><select id="selCat" aria-label="Move selected to">' + catOptions("") + '</select><button class="btn sm" data-act="selMove"' + (n ? "" : " disabled") + ">Move " + (n || "") + '</button><label class="check tiny"><input type="checkbox" id="selLearn" checked> Remember these stores</label>' +
+      '<button class="btn ghost sm danger-text" data-act="selDelete"' + (n ? "" : " disabled") + ">Delete</button></span></div>";
+  }
+
   /* PAGE: Transactions ----------------------------------------------- */
   let pendingImport = null;
   PAGES.spending = {
@@ -2578,10 +2622,13 @@
         '<div class="card"><div class="row between" style="margin-bottom:12px">' + monthNav() +
         '<div class="row"><input type="search" placeholder="Search" data-change="txSearch" value="' + esc(state.ui.q) + '" style="width:170px" aria-label="Search transactions">' +
         '<select data-change="txCat" style="width:auto" aria-label="Filter by category"><option value="all">All categories</option>' + state.categories.concat([OTHER]).map((c) => '<option value="' + c.id + '"' + (cf === c.id ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</select></div></div>" +
-        '<div class="row small muted" style="margin-bottom:6px;gap:16px"><span>In: <b class="good">' + money2(m.income) + '</b></span><span>Out: <b>' + money2(m.spent + m.savedTx) + "</b></span><span>" + tx.length + " shown</span></div>" +
+        '<div class="row small muted" style="margin-bottom:6px;gap:16px"><span>In: <b class="good">' + money2(m.income) + '</b></span><span>Out: <b>' + money2(m.spent + m.savedTx) + "</b></span><span>" + tx.length + " shown</span>" +
+          '<span class="row" style="margin-left:auto;gap:8px">' + (tx.some((t) => t.cat === "other" && t.kind === "expense") || state.transactions.some((t) => !t.example && t.cat === "other") ? '<button class="btn soft sm" data-act="sortOther">✨ Sort my Other</button>' : "") +
+          '<button class="btn ' + (selMode ? "" : "ghost ") + 'sm" data-act="selToggle">' + (selMode ? "Done selecting" : "☑️ Select") + "</button></span></div>" +
+        (selMode ? selectBar(tx) : "") +
         (tx.length ? Object.entries(byDay).map(([d, list]) =>
           '<div class="label" style="margin-top:12px">' + parseISO(d).toLocaleDateString(C.locale, { weekday: "short", month: "short", day: "numeric" }) + '</div><div class="list">' +
-          list.map((t) => { const c = catById(t.cat); return '<div class="item tx-item">' + bubble(c.icon, c.color) +
+          list.map((t) => { const c = catById(t.cat); return '<div class="item tx-item' + (selMode && selIds.has(t.id) ? " picked" : "") + '">' + (selMode ? '<input type="checkbox" class="tx-pick" data-change="txPick" data-id="' + t.id + '"' + (selIds.has(t.id) ? " checked" : "") + ' aria-label="Select ' + esc(t.desc) + '">' : "") + bubble(c.icon, c.color) +
             '<div class="grow"><div class="t">' + esc(t.desc) + exTag(t) + '</div><div class="tiny muted">' + esc(c.name) + "</div></div>" +
             '<select data-change="txCatInline" data-id="' + t.id + '" aria-label="Category">' + catOptions(t.cat) + "</select>" +
             '<span class="amt ' + (t.kind === "income" ? "good" : "") + '">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</span>" +
@@ -3123,7 +3170,7 @@
       '<div class="seg"><label><input type="radio" name="kind" value="expense" data-change="txKind" hidden' + (t.kind === "expense" ? " checked" : "") + '><span class="segbtn">Money out</span></label><label><input type="radio" name="kind" value="income" data-change="txKind" hidden' + (t.kind === "income" ? " checked" : "") + '><span class="segbtn">Money in</span></label></div>' +
       '<div class="fgrid">' + field("Amount", moneyInput('name="amount" min="0" required value="' + esc(t.amount) + '" placeholder="0.00" style="font-size:1.2rem"')) + field("Date", '<input type="date" name="date" required value="' + esc(t.date) + '">') + "</div>" +
       field("What was it?", '<input name="desc" value="' + esc(t.desc) + '" placeholder="e.g. Tim Hortons">') +
-      '<div><div class="label" style="margin-bottom:6px">Category</div><div class="catpick" id="catPick">' + catPick(t.kind, t.cat) + "</div></div>" +
+      '<div><div class="label" style="margin-bottom:6px">Category <span class="cat-hint tiny muted"></span></div><div class="catpick" id="catPick"' + (isNew ? "" : ' data-picked="1"') + ">" + catPick(t.kind, t.cat) + "</div></div>" +
       '<label class="check small"><input type="checkbox" name="learn"> Always sort this name into this category</label>' +
       '<div class="row"><button class="btn">' + icon("check") + (isNew ? " Add it" : " Save") + '</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>');
   }
@@ -3176,6 +3223,44 @@
      Button actions
      ================================================================== */
   const ACT = {
+    selToggle() { selMode = !selMode; selIds.clear(); render(); },
+    selMove() {
+      const cat = ($("#selCat") || {}).value, learn = ($("#selLearn") || {}).checked; if (!cat || !selIds.size) return;
+      const kind = kindForCat(cat, "expense"); let n = 0; const learned = new Set();
+      state.transactions.forEach((t) => { if (!selIds.has(t.id)) return; t.cat = cat; t.kind = kind; t.recatOn = todayISO(); n++;
+        if (learn) { const words = merchantKey(t.desc).split(" ").slice(0, 2).join(" "); if (words.length > 2 && !state.rules.some((r) => r.match.toUpperCase() === words)) { state.rules.unshift({ match: words, cat }); learned.add(words); } } });
+      selIds.clear(); commit("Moved " + n + " to " + esc(catById(cat).name) + (learned.size ? " · Penny will remember " + learned.size + (learned.size === 1 ? " store" : " stores") : ""));
+    },
+    selDelete() {
+      if (!selIds.size) return;
+      if (!window.__delArmed) { window.__delArmed = true; toast("Tap Delete again to remove " + selIds.size + " transactions"); setTimeout(() => { window.__delArmed = false; }, 4000); return; }
+      window.__delArmed = false; const n = selIds.size; state.transactions = state.transactions.filter((t) => !selIds.has(t.id)); selIds.clear(); commit("Deleted " + n + " transactions");
+    },
+    sortOther() {
+      const list = state.transactions.filter((t) => !t.example && t.cat === "other" && !t.recatOn);
+      const tips = list.map((t) => ({ t, e: explainCat(t.desc, t.kind) })).filter((x) => x.e && x.e.cat !== "other");
+      const left = list.filter((t) => !tips.some((x) => x.t === t));
+      window.__sortTips = tips;
+      sortOtherModal(tips, left);
+    },
+    async sortOtherAI() {
+      const left = state.transactions.filter((t) => !t.example && t.cat === "other" && !t.recatOn && !(window.__sortTips || []).some((x) => x.t === t)).slice(0, 60);
+      const sample = await getSample(); if (!sample || !left.length) return toast("Nothing more Penny can sort here");
+      toast("✨ Asking Claude about " + left.length + " transactions...");
+      const cats = state.categories.filter((c) => c.group !== "income").map((c) => c.id + " = " + c.name).join("\n");
+      try {
+        const r = await sample.json("Sort these Canadian bank transactions into budget categories. Reply with only JSON like {\"items\":[{\"i\":0,\"category\":\"groceries\",\"why\":\"grocery store\"}]}. Use only these ids:\n" + cats + "\nother = Other (use it if you are not sure). Never guess wildly.\n\n" + left.map((t, i) => i + ": " + t.desc).join("\n"));
+        const items = r && Array.isArray(r.items) ? r.items : [];
+        items.forEach((it) => { const t = left[+it.i]; if (t && state.categories.some((c) => c.id === it.category && c.group !== "income")) window.__sortTips.push({ t, e: { cat: it.category, why: "Claude: " + String(it.why || "").replace(/<[^>]*>/g, "").slice(0, 60) } }); });
+        sortOtherModal(window.__sortTips, state.transactions.filter((t) => !t.example && t.cat === "other" && !t.recatOn && !window.__sortTips.some((x) => x.t === t)));
+      } catch (e) { toast("Claude couldn't help with that right now"); }
+    },
+    sortOtherApply() {
+      const tips = window.__sortTips || []; let n = 0;
+      document.querySelectorAll(".sort-row").forEach((row) => { const i = +row.dataset.i, x = tips[i]; if (!x || !row.querySelector("input[type=checkbox]").checked) return; const cat = row.querySelector("select").value; x.t.cat = cat; x.t.kind = kindForCat(cat, x.t.kind); n++; });
+      closeModal(); commit("Sorted " + n + " transactions");
+      if (n) setTimeout(() => celebrate("track", { pose: "proud", emoji: "✨", title: n + " sorted!", sub: "Your spending picture just got a lot clearer." }), 200);
+    },
     undoSync() {
       const snap = lastSnapshot(); if (!snap) return toast("Nothing to undo");
       try {
@@ -3476,6 +3561,8 @@
      Dropdowns, checkboxes and file inputs
      ================================================================== */
   const CHG = {
+    txPick(el) { if (el.checked) selIds.add(el.dataset.id); else selIds.delete(el.dataset.id); render(); },
+    selAll(el) { (window.__lastShown || []).forEach((id) => { if (el.checked) selIds.add(id); else selIds.delete(id); }); render(); },
     balApply(el) { const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (b) b.apply = el.checked; },
     balAcct(el) {
       const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (!b) return;
@@ -3585,11 +3672,19 @@
     });
     document.addEventListener("change", (e) => {
       if (e.target.name === "cat" && e.target.closest && e.target.closest('form[data-form="saveSub"]')) e.target.dataset.picked = "1";
+      if (e.target.name === "cat" && e.target.closest && e.target.closest("#catPick") && e.isTrusted) e.target.closest("#catPick").dataset.picked = "1";
       const el = e.target.closest("[data-change]"); if (el && CHG[el.dataset.change]) CHG[el.dataset.change](el, e);
     });
     let searchTimer;
     document.addEventListener("input", (e) => {
       const el = e.target;
+      // add/edit transaction: pick the category from what you type (until you tap one yourself)
+      if (el.name === "desc" && el.closest && el.closest('form[data-form="saveTx"]')) {
+        const f = el.form, box = f.querySelector("#catPick");
+        if (box && !box.dataset.picked) { const kind = (f.querySelector("input[name=kind]:checked") || {}).value || "expense", g = explainCat(el.value, kind);
+          const hint = f.querySelector(".cat-hint");
+          if (g) { const r = box.querySelector('input[name=cat][value="' + g.cat + '"]'); if (r) { r.checked = true; if (hint) hint.textContent = "✨ " + g.why; } } else if (hint) hint.textContent = ""; }
+      }
       // bill form: pick the budget category from the name as you type (until you choose one yourself)
       if (el.name === "name" && el.closest && el.closest('form[data-form="saveSub"]')) { const sel = el.form.querySelector("select[name=cat]"); if (sel && !sel.dataset.picked) sel.value = billCat({ name: el.value }); }
       if (el.dataset && el.dataset.change === "txSearch") { clearTimeout(searchTimer); searchTimer = setTimeout(() => CHG.txSearch(el), 250); return; }

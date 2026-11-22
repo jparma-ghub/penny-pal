@@ -82,6 +82,7 @@ Use Ctrl+F (Cmd+F on Mac) to jump to a section:
 | `6. CATEGORIES` | Starting categories (you can also edit them in the app) |
 | `GOALS + ACCOUNTS` | Goal types, cover colours, account types |
 | `7. AUTO RULES` | Words in a bank description and which category they go to |
+| `MERCHANT GUIDE` | Hundreds of Canadian stores and the category each belongs to. Add any store you like |
 | `8. LEVELS` | Level names and XP needed |
 | `9. QUESTS` | Starter quests (one time) and where tapping each one takes you |
 | `9b. WEEKLY QUESTS` | The pool of weekly quests, how many you get, the bonus XP, swaps per week |
