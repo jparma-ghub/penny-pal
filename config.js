@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "2.8",
+  version: "2.9",
   whatsNew: [
+    "🐷 Bigger Penny on every page, and she moves to match her picture. Tap her to say hi!",
+    "📌 On phones, the top bar and page tabs stay put while you scroll",
     "⭐ Setup XP is now given at the end, only for the steps you actually fill in",
     "🗼 A brand new Toronto skyline, day and night, with the CN Tower front and center",
     "❓ Every page now has a ? next to its name. Tap it and Penny explains what the page is for",

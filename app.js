@@ -799,7 +799,7 @@
   const field = (label, inner, hint) => '<label class="field">' + label + inner + (hint ? '<span class="hint">' + hint + "</span>" : "") + "</label>";
   const bind = (path) => { const [a, b] = path.split("."); const v = state[a][b]; return 'data-bind="' + path + '" value="' + esc(v) + '"'; };
   const monthNav = () => '<div class="row" style="gap:4px"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Previous month">' + icon("chevron-left") + '</button><b style="min-width:138px;text-align:center">' + monthLabel(state.ui.month) + '</b><button class="iconbtn" data-act="month" data-d="1" aria-label="Next month">' + icon("chevron-right") + "</button></div>";
-  const exampleNote = () => state.isExample ? '<div class="callout gold">' + icon("info") + '<div style="flex:1">You\'re looking at <b>example data</b>. Ready to make it yours? Setup takes about 3 minutes.</div><button class="btn gold sm" data-act="startSetup">Set up my profile</button><button class="btn ghost sm" data-act="clearExample">Just clear it</button></div>' : "";
+  const exampleNote = () => state.isExample ? '<div class="callout gold example-note"><div class="example-text">' + icon("info") + '<span>You\'re looking at <b>example data</b>. Ready to make it yours? Setup takes about 3 minutes.</span></div><div class="example-btns"><button class="btn gold sm" data-act="startSetup">Set up my profile</button><button class="btn ghost sm" data-act="clearExample">Just clear it</button></div></div>' : "";
   const PAGE_EMOJI = { path: "🗺️", spending: "🧾", budgets: "👛", bills: "📺", goals: "🎯", networth: "⚖️", taxes: "🍁", retirement: "🌅", house: "🔑", learn: "📚", rewards: "🏆", reminders: "🔔", mydata: "💾" };
   const PAGE_POSE = { path: "explorer", spending: "thinking", budgets: "coin", bills: "surprised", goals: "jar", networth: "growth", taxes: "taxes", retirement: "retire", house: "home", learn: "reading", rewards: "trophy", reminders: "alarm", mydata: "calm" };
   function showPageIntro(id) {
@@ -818,7 +818,7 @@
   }
   const pennyOn = () => (C.mascotStyle || "P") === "P";
   const pageName = (id) => (C.pageNames && C.pageNames[id]) || null;
-  const head = (title, sub, right) => { const pn = pageName(pageId()); if (pn) { sub = pn[2] || sub; } return '<div class="page-head">' + (pennyOn() && PAGE_POSE[pageId()] ? mascot(76, "P", PAGE_POSE[pageId()]) : "") + '<div style="flex:1;min-width:0">' + (pn ? '<div class="label">' + title + "</div>" : "") + "<h1>" + (!pennyOn() && PAGE_EMOJI[pageId()] ? '<span class="head-emoji" aria-hidden="true">' + PAGE_EMOJI[pageId()] + "</span>" : "") + '<span class="h1-text">' + (pn ? esc(pn[0]) : title) + "</span>" + (C.pageIntros && C.pageIntros[pageId()] ? '<button type="button" class="help-q" data-act="pageHelp" aria-label="What is this page?" title="What is this page?">?</button>' : "") + "</h1>" + (sub ? "<p>" + sub + "</p>" : "") + "</div>" + (right ? '<div class="row">' + right + "</div>" : "") + "</div>"; };
+  const head = (title, sub, right) => { const pn = pageName(pageId()); if (pn) { sub = pn[2] || sub; } return '<div class="page-head">' + (pennyOn() && PAGE_POSE[pageId()] ? '<button type="button" class="head-penny" data-act="pennyPoke" aria-label="Say hi to Penny">' + mascot(124, "P", PAGE_POSE[pageId()]) + "</button>" : "") + '<div style="flex:1;min-width:0">' + (pn ? '<div class="label">' + title + "</div>" : "") + "<h1>" + (!pennyOn() && PAGE_EMOJI[pageId()] ? '<span class="head-emoji" aria-hidden="true">' + PAGE_EMOJI[pageId()] + "</span>" : "") + '<span class="h1-text">' + (pn ? esc(pn[0]) : title) + "</span>" + (C.pageIntros && C.pageIntros[pageId()] ? '<button type="button" class="help-q" data-act="pageHelp" aria-label="What is this page?" title="What is this page?">?</button>' : "") + "</h1>" + (sub ? "<p>" + sub + "</p>" : "") + "</div>" + (right ? '<div class="row">' + right + "</div>" : "") + "</div>"; };
   const exTag = (x) => (x.example ? ' <span class="pill example">Example</span>' : "");
   function remRow(r, compact) {
     const d = daysBetween(today(), r.date);
@@ -987,7 +987,7 @@
     style = style || C.mascotStyle || "P"; // everyone gets the 3D Penny
     if (style === "P") {
       const src = uniqueSrc(pose);
-      if (src) return '<span class="mascot mascot-img" data-size="' + size + '" style="width:' + size + "px;height:" + size + 'px"><img src="' + esc(src) + '" width="' + size + '" height="' + size + '" alt="' + esc(C.mascotName || "Penny") + ' the piggy bank" decoding="async"></span>';
+      if (src) return '<span class="mascot mascot-img" data-pose="' + esc(pose || "happy") + '" data-size="' + size + '" style="width:' + size + "px;height:" + size + 'px"><img src="' + esc(src) + '" width="' + size + '" height="' + size + '" alt="' + esc(C.mascotName || "Penny") + ' the piggy bank" decoding="async"></span>';
       style = "A";
     }
     const id = "pp" + style + ++mascotN, nm = esc(C.mascotName || "Penny");
@@ -2189,6 +2189,7 @@
      Button actions
      ================================================================== */
   const ACT = {
+    pennyPoke(el) { const m = el.querySelector(".mascot-img"); if (!m) return; m.classList.remove("poked"); void m.offsetWidth; m.classList.add("poked"); },
     pageHelp() { showPageIntro(pageId()); },
     scanReceipt() { scanModal(); },
     pasteReceipt() {
@@ -2525,6 +2526,11 @@
   render();
   save();
   checkSnow();
+  (function pinTabs() {
+    const tb = $("#topbar"); if (!tb) return;
+    const setH = () => document.documentElement.style.setProperty("--tb-h", tb.offsetHeight + "px");
+    setH(); if (window.ResizeObserver) new ResizeObserver(setH).observe(tb); else window.addEventListener("resize", setH);
+  })();
   if (freshVisit) { state.ui.seenVersion = C.version; state.ui.setupStep = -1; renderWizard(); state.ui.setupStep = 0; }
   if (state.ui.seenVersion !== C.version) {
     const firstVisit = state.isExample && !state.profile.xp;

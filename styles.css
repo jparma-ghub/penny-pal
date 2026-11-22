@@ -634,3 +634,71 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
     linear-gradient(180deg, rgba(44, 38, 78, .6), rgba(44, 38, 78, .3) 55%, rgba(44, 38, 78, 0)),
     var(--hero-img) 50% bottom / auto 62% no-repeat, #8a8db0; }
 }
+
+/* Example data note: words on top, buttons underneath */
+.callout.example-note { flex-direction: column; gap: 10px; align-items: stretch; }
+.example-note .example-text { display: flex; gap: 10px; align-items: flex-start; }
+.example-note .example-text .ic { flex: none; margin-top: 2px; color: var(--warn); }
+.example-note .example-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 560px) { .example-note .example-btns .btn { flex: 1 1 0; justify-content: center; } .callout.example-note { font-size: .86rem; padding: 12px 14px; } }
+
+/* Phones: the top bar and the page tabs stay pinned while you scroll */
+@media (max-width: 900px) {
+  .mobile-nav { position: sticky; top: calc(var(--tb-h, 64px) + env(safe-area-inset-top, 0px)); z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); padding-top: 4px; box-shadow: 0 6px 10px -8px rgba(80, 60, 120, .25); }
+  .topbar { background: color-mix(in srgb, var(--bg) 92%, transparent); }
+}
+
+/* Penny is the star of every page */
+.head-penny { all: unset; cursor: pointer; flex: none; display: grid; place-items: center; border-radius: 50%; -webkit-tap-highlight-color: transparent; }
+.head-penny:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.page-head { align-items: center; }
+.page-head p { font-size: .84rem; line-height: 1.45; }
+@media (max-width: 560px) {
+  .page-head .head-penny .mascot-img { width: 104px !important; height: 104px !important; }
+  .page-head .head-penny .mascot-img img { width: 104px; height: 104px; }
+  .page-head p { font-size: .78rem; }
+  .page-head > div[style*="flex:1"] { flex: 1 1 0 !important; }
+}
+.page-head .mascot-img img { transform-origin: 50% 90%; filter: drop-shadow(0 8px 10px rgba(120, 80, 140, .18)); }
+
+/* Each Penny moves in a way that fits her picture */
+@media (prefers-reduced-motion: no-preference) {
+  .page-head .mascot-img img, .intro .mascot-img img { animation: pp-float 4s ease-in-out infinite; }
+  .mascot-img[data-pose="explorer"] img { animation: pp-explore 5s ease-in-out infinite !important; }   /* looks around the map */
+  .mascot-img[data-pose="thinking"] img { animation: pp-think 4s ease-in-out infinite !important; }     /* tilts her head, hmm */
+  .mascot-img[data-pose="coin"] img { animation: pp-hop 2.6s ease-in-out infinite !important; }         /* happy coin hop */
+  .mascot-img[data-pose="surprised"] img { animation: pp-jump 3.2s ease-out infinite !important; }      /* gasp! a little jump */
+  .mascot-img[data-pose="jar"] img { animation: pp-jiggle 3s ease-in-out infinite !important; }         /* jiggles the jar */
+  .mascot-img[data-pose="growth"] img { animation: pp-grow 3.6s ease-in-out infinite !important; }      /* growing taller */
+  .mascot-img[data-pose="taxes"] img { animation: pp-type 3s ease-in-out infinite !important; }         /* tap tap on the calculator */
+  .mascot-img[data-pose="retire"] img { animation: pp-rock 4.5s ease-in-out infinite !important; transform-origin: 50% 100%; }  /* rocking chair */
+  .mascot-img[data-pose="home"] img { animation: pp-float 3.6s ease-in-out infinite !important; }       /* floating with her dream home */
+  .mascot-img[data-pose="reading"] img { animation: pp-nod 4.5s ease-in-out infinite !important; }      /* slow nod while reading */
+  .mascot-img[data-pose="trophy"] img { animation: pp-cheer 2.8s ease-in-out infinite !important; }     /* lifts the trophy, it shines */
+  .mascot-img[data-pose="alarm"] img { animation: pp-ring 2.6s ease-in-out infinite !important; }       /* rings like an alarm clock */
+  .mascot-img[data-pose="calm"] img { animation: pp-breathe 6s ease-in-out infinite !important; }       /* slow calm breathing */
+  .mascot-img[data-pose="sad"] img, .mascot-img[data-pose="comfort"] img { animation: pp-sway 5s ease-in-out infinite !important; }
+  .mascot-img.poked img { animation: pp-poke .7s cubic-bezier(.3, 1.6, .5, 1) !important; }             /* tap her and she bounces */
+
+  @keyframes pp-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+  @keyframes pp-explore { 0%, 100% { transform: translateX(0) rotate(0); } 25% { transform: translateX(-4px) rotate(-4deg); } 50% { transform: translateY(-5px); } 75% { transform: translateX(4px) rotate(4deg); } }
+  @keyframes pp-think { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-6deg) translateY(-2px); } 60% { transform: rotate(3deg); } }
+  @keyframes pp-hop { 0%, 55%, 100% { transform: translateY(0) scale(1, 1); } 62% { transform: translateY(0) scale(1.06, .94); } 75% { transform: translateY(-12px) scale(.97, 1.04); } 88% { transform: translateY(0) scale(1.04, .96); } }
+  @keyframes pp-jump { 0%, 60%, 100% { transform: translateY(0) scale(1); } 68% { transform: translateY(-14px) scale(1.06); } 78% { transform: translateY(0) scale(.98, 1.02); } 86% { transform: translateY(-4px); } }
+  @keyframes pp-jiggle { 0%, 50%, 100% { transform: rotate(0); } 58% { transform: rotate(-6deg); } 66% { transform: rotate(6deg); } 74% { transform: rotate(-4deg); } 82% { transform: rotate(3deg); } }
+  @keyframes pp-grow { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.07); } }
+  @keyframes pp-type { 0%, 40%, 100% { transform: translateY(0); } 46% { transform: translateY(-3px) rotate(-1deg); } 52% { transform: translateY(0); } 58% { transform: translateY(-3px) rotate(1deg); } 64% { transform: translateY(0); } 70% { transform: translateY(-3px); } 76% { transform: translateY(0); } }
+  @keyframes pp-rock { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+  @keyframes pp-nod { 0%, 100% { transform: rotate(0) translateY(0); } 40% { transform: rotate(2deg) translateY(2px); } 55% { transform: rotate(0) translateY(0); } }
+  @keyframes pp-cheer { 0%, 100% { transform: translateY(0); filter: drop-shadow(0 8px 10px rgba(120, 80, 140, .18)); } 45% { transform: translateY(-10px) rotate(-3deg); filter: drop-shadow(0 0 14px rgba(255, 210, 90, .75)); } }
+  @keyframes pp-ring { 0%, 55%, 100% { transform: rotate(0); } 60% { transform: rotate(-9deg); } 64% { transform: rotate(9deg); } 68% { transform: rotate(-9deg); } 72% { transform: rotate(9deg); } 76% { transform: rotate(-5deg); } 80% { transform: rotate(0); } }
+  @keyframes pp-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  @keyframes pp-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg) translateY(-3px); } }
+  @keyframes pp-poke { 0% { transform: scale(1); } 35% { transform: scale(1.15, .88) translateY(4px); } 65% { transform: scale(.94, 1.1) translateY(-12px); } 100% { transform: scale(1); } }
+
+  /* Calm mode: every Penny just breathes slowly */
+  [data-calm] .mascot-img img { animation: pp-breathe 7s ease-in-out infinite !important; }
+}
+@media (max-width: 900px) {
+  .topbar, .mobile-nav { margin-left: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); margin-right: calc(-1 * max(16px, env(safe-area-inset-right, 0px))); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: none; }
+}
