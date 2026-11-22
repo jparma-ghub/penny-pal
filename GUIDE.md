@@ -141,7 +141,7 @@ To change an existing rule for everyone, add it with the new category instead of
 
 ## Sharing updates with friends
 
-When you change the app and republish it to the same link, everyone with the link gets the new version and keeps everything they've entered. To show them what changed, bump `version` at the top of `config.js` and add a line to `whatsNew`. They'll see a "What's new" popup once.
+When you change the app and republish it to the same link, everyone with the link gets the new version and keeps everything they've entered. To show them what changed, bump `version` at the top of `config.js` and replace the lines in `whatsNew` with just the newest changes (one to three lines is plenty). They'll see a "What's new" popup once.
 
 Keep the stats in `10d` honest: each one lists its source and year. When newer surveys come out, update the numbers and the year.
 
