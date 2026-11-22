@@ -740,13 +740,13 @@
     let ix, data;
     if (hasHeader) {
       const find = (...keys) => head.findIndex((h) => keys.some((k) => h.includes(k)));
-      ix = { date: find("date"), desc: find("description", "desc", "payee", "merchant", "details", "name", "memo"), amount: find("amount", "cad$", "cad"), debit: find("debit", "withdraw", "money out"), credit: find("credit", "deposit", "money in") };
+      ix = { date: find("date"), desc: find("description", "desc", "payee", "merchant", "details", "name", "memo"), amount: find("amount", "cad$", "cad"), debit: find("debit", "withdraw", "money out"), credit: find("credit", "deposit", "money in"), bal: find("balance") };
       ix.desc2 = head.findIndex((h, i) => i !== ix.desc && h.includes("description"));
       if (ix.date < 0) ix.date = 0;
       if (ix.desc < 0) ix.desc = 1;
       data = rows.slice(1);
     } else {
-      ix = { date: 0, desc: 1, amount: -1, debit: 2, credit: 3, desc2: -1 }; // TD style: date, description, out, in, balance
+      ix = { date: 0, desc: 1, amount: -1, debit: 2, credit: 3, desc2: -1, bal: 4 }; // TD style: date, description, out, in, balance
       data = rows;
     }
     const out = [];
@@ -760,6 +760,7 @@
       if (flip) amt = -amt;
       const kind = amt < 0 ? "expense" : "income";
       out.push({ date, desc: desc || "(no description)", amount: Math.abs(amt), kind, cat: autoCat(desc, kind) });
+      if (ix.bal >= 0 && moneyCell(r[ix.bal]) !== null && (!out.balance || date >= out.balance.date)) out.balance = { amount: moneyCell(r[ix.bal]), date };
     }
     return out;
   }
@@ -1302,8 +1303,8 @@
           const raw = amts[i]; if (raw === null || raw === undefined || String(raw).trim() === "") return;
           const name = String(names[i] || "").trim() || acctType(type).name, bal = Math.max(0, num(raw));
           const existing = ids[i] && state.accounts.find((a) => a.id === ids[i]);
-          if (existing) Object.assign(existing, { type, name, balance: bal, updated: todayISO() });
-          else state.accounts.push({ id: uid(), name, type, balance: bal, updated: todayISO() });
+          if (existing) { Object.assign(existing, { type, name, balance: bal, updated: todayISO(), manualOn: todayISO() }); delete existing.asOf; }
+          else state.accounts.push({ id: uid(), name, type, balance: bal, updated: todayISO(), manualOn: todayISO() });
         });
         snapshotNet();
       }
@@ -2193,6 +2194,7 @@
   const COL_BAL = /^(balance|running balance|balance \(\$\))$/i;
   function parseStatementColumns(pages, year) {
     const out = [];
+    out.balance = null;
     for (const items of pages || []) {
       if (!items.length) continue;
       // join header words that pdf.js split up ("funds" + "out") by grouping items on the same line
@@ -2224,6 +2226,7 @@
         if (!cur) return;
         const desc = cur.desc.join(" ").replace(/\s+/g, " ").trim();
         if (desc && !SKIP_LINE.test(desc) && (cur.out || cur.in)) out.push({ date: cur.date, desc: desc.slice(0, 80), amt: cur.in && !cur.out ? cur.in : -cur.out });
+        if (cur.bal !== undefined && (!out.balance || cur.date >= out.balance.date)) out.balance = { amount: cur.bal, date: cur.date };
         cur = null;
       };
       for (const l of lines) {
@@ -2240,7 +2243,7 @@
           const isMoney = /^\(?-?\$?\s?\d{1,3}(,\d{3})*\.\d{2}\)?(\s?(CR|DR))?$|^\(?-?\$?\d+\.\d{2}\)?$/i.test(it.s);
           if (isMoney && it.x > cols.out - 120) {
             const where = near(it.x + it.w / 2), v = moneyToken(it.s).v;
-            if (where === "out" && !cur.out) cur.out = v; else if (where === "in" && !cur.in) cur.in = v; // balance is ignored
+            if (where === "out" && !cur.out) cur.out = v; else if (where === "in" && !cur.in) cur.in = v; else if (where === "bal") cur.bal = v; // the balance is never a transaction, but it tells us what's in the account
           } else if (it.x < cols.out - 40) {
             const t = ld && it === l.items[0] ? "" : it.s;
             if (t && !(ld && lineDate(t + " x", year))) cur.desc.push(t);
@@ -2259,7 +2262,12 @@
     const year = statementYear(text), lines = String(text || "").split(/\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
     const out = []; let prevBal = null;
     for (const line of lines) {
-      if (SKIP_LINE.test(line)) { const t = line.match(MONEY_RX); if (/balance/i.test(line) && t) prevBal = moneyToken(t[t.length - 1]).v; continue; }
+      if (SKIP_LINE.test(line)) {
+        const t = line.match(MONEY_RX);
+        if (/balance/i.test(line) && t) prevBal = moneyToken(t[t.length - 1]).v;
+        if (/closing balance|new balance|balance on|ending balance/i.test(line) && t) out.closing = moneyToken(t[t.length - 1]).v;
+        continue;
+      }
       const ld = lineDate(line, year); if (!ld) continue;
       let toks = ld.rest.match(MONEY_RX);
       if (!toks) { // amounts printed a little lower, on their own line
@@ -2276,7 +2284,7 @@
       if (bal !== null && prevBal !== null && Math.abs(Math.abs(bal - prevBal) - amt.v) < 0.02) sign = bal > prevBal ? 1 : -1;
       else if (amt.neg) sign = 1; // shown as a credit
       else sign = MONEY_IN.test(desc) ? 1 : -1;
-      if (bal !== null) prevBal = bal;
+      if (bal !== null) { prevBal = bal; if (!out.balance || ld.date >= out.balance.date) out.balance = { amount: bal, date: ld.date }; }
       out.push({ date: ld.date, desc: desc.slice(0, 80), amt: sign * amt.v });
     }
     return out;
@@ -2284,17 +2292,21 @@
   function bankPrompt(kind) {
     return (kind === "image" ? "The attached image is a screenshot or photo of a bank or credit card transaction list from Canada." : "Below is the text of a Canadian bank or credit card statement.") +
       " List every transaction you can read. Reply with only JSON like {\"transactions\":[{\"date\":\"2026-11-03\",\"description\":\"TIM HORTONS #1234\",\"amount\":-4.50}]}." +
+      " If the ending or current balance is shown, add \"balance\": number and \"balanceDate\": \"YYYY-MM-DD\" next to transactions." +
       " amount is negative for money going out (purchases, bills, withdrawals) and positive for money coming in (deposits, paycheques, refunds). date is YYYY-MM-DD; if the year isn't shown, use " + new Date().getFullYear() +
       ". Skip balances, totals and headings. Never invent transactions. If you can't read any, reply {\"transactions\":[]}.";
   }
   function checkAITransactions(ai) {
     const list = ai && Array.isArray(ai.transactions) ? ai.transactions : [];
     const latest = toISO(new Date(Date.now() + 3 * 86400000));
-    return list.map((t) => {
+    const res = list.map((t) => {
       const date = typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date) && t.date <= latest && t.date > "2000-01-01" ? t.date : null;
       const amt = +t.amount, desc = typeof t.description === "string" ? t.description.replace(/<[^>]*>/g, "").trim().slice(0, 80) : "";
       return date && isFinite(amt) && amt !== 0 && Math.abs(amt) < 1e6 && desc ? { date, desc, amt: Math.round(amt * 100) / 100 } : null;
     }).filter(Boolean);
+    const b = ai && +ai.balance, bd = ai && typeof ai.balanceDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(ai.balanceDate) && ai.balanceDate <= latest ? ai.balanceDate : null;
+    if (ai && ai.balance != null && isFinite(b) && Math.abs(b) < 1e8) res.balance = { amount: Math.round(b * 100) / 100, date: bd || (res.length ? res.map((x) => x.date).sort().pop() : todayISO()) };
+    return res;
   }
   async function aiStatement(input, image) {
     const sample = await getSample(); if (!sample) return null;
@@ -2306,6 +2318,55 @@
     try { return checkAITransactions(await sample.json(image ? bankPrompt("image") : bankPrompt("text") + "\n\n" + input.slice(0, 12000), image ? { images: [image] } : {})); }
     catch (e) { if (e && e.code === "rate_limited") throw e; return null; }
   }
+  // Is this a credit card or a bank account statement?
+  function accountKindOf(text, rows) {
+    if (/visa|mastercard|master card|amex|american express|credit card|minimum payment|credit limit|new balance|cash back card|rewards card/i.test(text)) return "card";
+    if (/line of credit|\bloc\b/i.test(text)) return "loc";
+    if (/savings|hisa|high interest/i.test(text)) return "savings";
+    return "chequing";
+  }
+  const BANK_NAMES = /\b(TD|RBC|ROYAL BANK|SCOTIA|BMO|CIBC|TANGERINE|EQ BANK|SIMPLII|NATIONAL BANK|DESJARDINS|WEALTHSIMPLE|KOHO|PC FINANCIAL|HSBC|MOTUSBANK|AMEX|CAPITAL ONE|ROGERS BANK|TRIANGLE)\b/i;
+  // What date is this account's number "as of"? A statement's end date, or the day you typed it yourself
+  const acctAsOf = (a) => (a.asOf && !(a.manualOn && a.manualOn > a.asOf) ? a.asOf : a.manualOn || a.updated || "");
+  function planBalances(list) {
+    // only the newest statement for each account counts
+    const keyOf = (b) => (b.kind || "") + "|" + ((b.name.match(BANK_NAMES) || [""])[0].toUpperCase());
+    const newest = {};
+    list.forEach((b) => { const k = keyOf(b); if (!newest[k] || b.date > newest[k].date) newest[k] = b; });
+    const skippedOlder = list.length - Object.keys(newest).length;
+    const plan = Object.values(newest).map((b) => {
+      const type = b.kind === "card" ? "cc" : b.kind === "loc" ? "loc" : b.kind === "savings" ? "savings" : "chequing";
+      const isDebt = type === "cc" || type === "loc";
+      const amount = Math.abs(b.amount); // a card's balance is what you owe
+      const bank = (b.name.match(BANK_NAMES) || [""])[0].toUpperCase();
+      const mine = state.accounts.filter((a) => !a.example && a.type === type);
+      const pick = mine.find((a) => bank && a.name.toUpperCase().includes(bank)) || mine[0] || null;
+      const days = daysBetween(parseISO(b.date), today());
+      const known = pick ? acctAsOf(pick) : "";
+      const typedByYou = !!(pick && (!pick.asOf || (pick.manualOn && pick.manualOn > pick.asOf)));
+      const newer = !pick || !known || (typedByYou ? b.date > known : b.date >= known);
+      const fresh = days <= 31;
+      return Object.assign({}, b, { type, isDebt, amount, typedByYou, known, accountId: pick ? pick.id : "new", newName: (bank ? (bank.length <= 4 ? bank : bank === "EQ BANK" ? "EQ Bank" : bank.charAt(0) + bank.slice(1).toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())) + " " : "") + acctType(type).name, apply: fresh && newer, days, newer });
+    });
+    plan.skippedOlder = skippedOlder;
+    return plan;
+  }
+  function balanceSection(p) {
+    if (!p.balances || !p.balances.length) return "";
+    return '<div class="card-inner bal-box"><h3>' + icon("scale") + " Update The Pig Picture?</h3>" +
+      '<p class="small muted">Penny found the balance at the end of ' + (p.balances.length === 1 ? "this statement" : "these statements") + ". Check it against your banking app before updating, since anything after the statement date isn't included.</p>" +
+      (p.balances.skippedOlder ? '<p class="tiny muted">You picked more than one statement for the same account, so Penny only used the newest one.</p>' : "") +
+      p.balances.map((b, i) => {
+        const acct = state.accounts.find((a) => a.id === b.accountId);
+        const opts = state.accounts.filter((a) => !a.example && acctType(a.type).kind === (b.isDebt ? "debt" : "asset")).map((a) => '<option value="' + a.id + '"' + (a.id === b.accountId ? " selected" : "") + ">" + esc(a.name) + " (now " + money2(a.balance) + ")</option>").join("") + '<option value="new"' + (b.accountId === "new" ? " selected" : "") + ">➕ New account: " + esc(b.newName) + "</option>";
+        const warn = b.days > 31 ? "This balance is from " + dayLabel(parseISO(b.date)) + ", over a month ago. Anything since then isn't included, so only update if it's still about right." :
+          !b.newer && acct ? (b.typedByYou ? "You typed " + esc(acct.name) + "'s balance yourself on " + dayLabel(parseISO(b.known)) + ", after this statement ended, so Penny keeps your number." : esc(acct.name) + " already has a newer balance (from " + dayLabel(parseISO(b.known)) + "), so Penny left it unticked.") :
+          b.days > 3 ? "Statement ends " + dayLabel(parseISO(b.date)) + ". Anything after that isn't included." : "";
+        return '<div class="bal-row"><label class="check"><input type="checkbox" data-change="balApply" data-i="' + i + '"' + (b.apply ? " checked" : "") + "> <span><b>" + esc(b.name) + "</b> ends with " + (b.isDebt ? "<b>" + money2(b.amount) + "</b> owed" : "a balance of <b>" + money2(b.amount) + "</b>") + " on " + esc(dayLabel(parseISO(b.date))) + "</span></label>" +
+          '<div class="row" style="gap:8px;margin-left:28px"><span class="small muted">Update</span><select data-change="balAcct" data-i="' + i + '">' + opts + "</select></div>" +
+          (warn ? '<p class="tiny warn-note" style="margin-left:28px">⚠️ ' + warn + "</p>" : "") + "</div>";
+      }).join("") + "</div>";
+  }
   let importBusy = "";
   // Read one file (CSV, PDF or picture) into signed rows: amt < 0 is money out
   async function readImportFile(file) {
@@ -2315,9 +2376,10 @@
     if (!file.size) throw new Error("It looks empty.");
     if (file.size > 25 * 1024 * 1024) throw new Error("It's over 25 MB.");
     if (isCsv) {
-      const rows = readBankRows(parseCSV(await file.text()), false).map((r) => ({ date: r.date, desc: r.desc, amt: r.kind === "income" ? r.amount : -r.amount }));
+      const raw = await file.text(), parsed = readBankRows(parseCSV(raw), false);
+      const rows = parsed.map((r) => ({ date: r.date, desc: r.desc, amt: r.kind === "income" ? r.amount : -r.amount }));
       if (!rows.length) throw new Error("No transactions found. Make sure it's the CSV from your bank.");
-      return { rows, how: "csv" };
+      return { rows, how: "csv", balance: parsed.balance || null, kind: accountKindOf(name + " " + raw.slice(0, 400), rows) };
     }
     if (isPdf) {
       let pdf;
@@ -2326,23 +2388,26 @@
       const text = cleanText(pdf.text);
       let rows = parseStatementColumns(pdf.pages, statementYear(text)), how = "pdf";
       if (!rows.length) rows = parseStatementText(text);
+      let balance = rows.balance || null;
+      if (rows.closing != null) balance = { amount: rows.closing, date: balance ? balance.date : rows.length ? rows.map((x) => x.date).sort().pop() : todayISO() };
+      const kind = accountKindOf(name + " " + text.slice(0, 3000), rows);
       if (rows.length < 2 && text.length > 40) { const ai = await aiStatement(text, null); if (ai && ai.length > rows.length) { rows = ai; how = "ai"; } }
       if (!rows.length && pdf.image) { const r = await readStatementImage(pdf.image); rows = r.rows; how = r.how; }
       if (!rows.length) throw new Error("No transactions found. If it's a scanned statement, try a screenshot or the CSV.");
-      return { rows, how };
+      return { rows, how, balance: balance || rows.balance || null, kind };
     }
     if (isImg) {
       const r = await readStatementImage(file);
       if (r.error) throw new Error(r.error);
       if (!r.rows.length) throw new Error("Penny couldn't read any transactions in it. Try a sharper screenshot.");
-      return { rows: r.rows, how: r.how };
+      return { rows: r.rows, how: r.how, balance: r.rows.balance || null, kind: accountKindOf(name, r.rows) };
     }
     throw new Error("Penny can read CSV files, PDF statements and screenshots, not this kind of file.");
   }
   async function importFiles(fileList) {
     const files = Array.from(fileList || []).filter(Boolean).slice(0, 30);
     if (!files.length) return;
-    const all = [], errors = [], hows = new Set(), names = [];
+    const all = [], errors = [], hows = new Set(), names = [], balances = [];
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       importBusy = files.length > 1 ? "Reading " + (i + 1) + " of " + files.length + ": " + (f.name || "file") : /\.pdf$/i.test(f.name || "") ? "Penny is reading your statement..." : /\.csv$/i.test(f.name || "") ? "Penny is reading your file..." : "Penny is reading your screenshot...";
@@ -2350,6 +2415,7 @@
       try {
         const r = await readImportFile(f);
         names.push(f.name || "file " + (i + 1)); hows.add(r.how);
+        if (r.balance && isFinite(r.balance.amount)) balances.push({ file: names.length - 1, name: f.name || "file", amount: r.balance.amount, date: r.balance.date, kind: r.kind });
         r.rows.forEach((row) => all.push(Object.assign({ file: names.length - 1 }, row)));
       } catch (e) {
         if (e && e.code === "rate_limited") { errors.push({ name: f.name, msg: "Penny needed a break from reading. Try this one again in a minute." }); continue; }
@@ -2361,14 +2427,14 @@
       pendingImport = null; render();
       return importFail(errors.length === 1 ? errors[0].name + ": " + errors[0].msg : "Penny couldn't read any of those files. " + errors.map((x) => x.name + ": " + x.msg).join(" "));
     }
-    pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors };
+    pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors, balances: planBalances(balances) };
     Object.assign(pendingImport, buildFromBase(all, {}));
     render();
   }
   async function readStatementImage(blob) {
     let jpeg; try { jpeg = await imageToJpeg(blob, 2000); } catch (e) { return { rows: [], error: /heic|heif/i.test(blob.type || "") ? "iPhone HEIC pictures can't be opened here. Take a screenshot instead (screenshots are PNG)." : "That picture couldn't be opened. Try another screenshot." }; }
     const ai = await aiStatement("", jpeg.blob);
-    if (ai && ai.length) return { rows: ai, how: "ai" };
+    if (ai && ai.length) return { rows: ai, how: "ai" }; // ai.balance comes along with the list
     const text = await ocrRead(jpeg.blob).catch(() => null);
     return { rows: text ? parseStatementText(cleanText(text)) : [], how: "ocr" };
   }
@@ -2446,6 +2512,7 @@
         (p.rows.some((t, i) => (p.skip || {})[i] && CARD_PAYMENT.test(t.desc)) ? '<p class="tiny muted">💳 Credit card payments start unticked: paying off your card isn\'t new money, it\'s already counted when you spent it.</p>' : "") +
         p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + "</td><td><select class=\"import-cat\" data-change=\"importCat\" data-i=\"" + i + "\" aria-label=\"Category\">" + catOptions(t.cat) + "</select></td>" + (p.files && p.files.length > 1 ? '<td class="tiny muted">' + esc(p.files[t.file] || "") + "</td>" : "") + '<td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
         "</tbody></table></div>" +
+        balanceSection(p) +
         '<div class="callout">' + icon("info") + "<div>Spending should show as minus and paycheques as plus. If it's backwards (common with credit card files), press Flip.</div></div>" +
         '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + (p.rows.length - Object.values(p.skip || {}).filter(Boolean).length) + '</button>' + (p.files && p.files.length > 1 ? p.files.map((n, i) => '<button class="btn ghost sm" data-act="flipImport" data-file="' + i + '">' + icon("refresh-cw") + " Flip " + esc(n.length > 18 ? n.slice(0, 16) + "…" : n) + "</button>").join("") : '<button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + " Flip plus/minus</button>") + '<button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
     }
@@ -2568,7 +2635,7 @@
       const latest = state.credit.slice().sort((a, b) => b.date.localeCompare(a.date));
       const sc = latest[0] ? latest[0].score : null;
       const group = (title, list, kind) => '<div class="card"><div class="card-head"><h2>' + title + '</h2><b class="' + (kind === "debt" ? "bad" : "good") + '">' + money(list.reduce((a, x) => a + num(x.balance), 0)) + '</b></div><div class="list">' +
-        (list.length ? list.map((a) => { const t = acctType(a.type); return '<div class="item">' + bubble(t.icon, kind === "debt" ? "#d98383" : "#5fae7c") + '<div class="grow"><div class="t">' + esc(a.name) + exTag(a) + '</div><div class="tiny muted">' + esc(t.name) + "</div></div>" +
+        (list.length ? list.map((a) => { const t = acctType(a.type); return '<div class="item">' + bubble(t.icon, kind === "debt" ? "#d98383" : "#5fae7c") + '<div class="grow"><div class="t">' + esc(a.name) + exTag(a) + '</div><div class="tiny muted">' + esc(t.name) + (a.asOf && !(a.manualOn && a.manualOn > a.asOf) ? " · from your statement, " + esc(dayLabel(parseISO(a.asOf))) : a.updated && !a.example ? " · you updated it " + esc(dayLabel(parseISO(a.manualOn || a.updated))) : "") + "</div></div>" +
           '<span class="money-in" style="width:130px"><input type="number" step="any" value="' + num(a.balance) + '" data-change="acctBal" data-id="' + a.id + '" aria-label="Balance of ' + esc(a.name) + '"></span>' +
           '<button class="iconbtn" data-act="editAcct" data-id="' + a.id + '" title="Edit">' + icon("pencil") + '</button><button class="iconbtn del" data-act="delAcct" data-id="' + a.id + '" title="Delete">' + icon("trash-2") + "</button></div>"; }).join("")
           : '<p class="small muted">' + (kind === "debt" ? "Credit cards, OSAP, car loans, mortgage." : "Chequing, savings, TFSA, RRSP, FHSA.") + "</p>") + "</div></div>";
@@ -3075,6 +3142,15 @@
       state.transactions.push(...rows); state.flags.imported = true; state.flags.importOn = todayISO();
       if (rows.length) state.ui.month = rows.map((r) => r.date).sort().pop().slice(0, 7);
       const paid = markBillsPaid(rows);
+      const balNotes = [];
+      for (const b of pendingImport.balances || []) {
+        if (!b.apply) continue;
+        let a = state.accounts.find((x) => x.id === b.accountId);
+        if (!a) { a = { id: uid(), name: b.newName, type: b.type, balance: 0 }; state.accounts.push(a); }
+        const was = +a.balance || 0; a.balance = b.amount; a.updated = todayISO(); a.asOf = b.date; a.example = false; delete a.manualOn;
+        balNotes.push(a.name + ": " + money2(was) + " → " + money2(b.amount));
+      }
+      if (balNotes.length) { snapshotNet(); setTimeout(() => toast("⚖️ The Pig Picture updated. " + esc(balNotes.join(", "))), 1800); }
       pendingImport = null; award(Math.min(100, rows.length * 2), "Imported " + rows.length + " transactions"); commit();
       setTimeout(() => billCheckModal(paid), 2600);
     },
@@ -3256,8 +3332,8 @@
       commit();
     },
     saveAcct(f, d) {
-      const a = { name: d.name.trim() || acctType(d.type).name, type: d.type, balance: Math.abs(num(d.balance)), updated: todayISO() };
-      if (d.id) Object.assign(state.accounts.find((x) => x.id === d.id), a, { example: false });
+      const a = { name: d.name.trim() || acctType(d.type).name, type: d.type, balance: Math.abs(num(d.balance)), updated: todayISO(), manualOn: todayISO() };
+      if (d.id) { const ex = state.accounts.find((x) => x.id === d.id); Object.assign(ex, a, { example: false }); delete ex.asOf; }
       else state.accounts.push(Object.assign({ id: uid() }, a));
       snapshotNet(); closeModal(); commit("Saved");
     },
@@ -3269,6 +3345,14 @@
      Dropdowns, checkboxes and file inputs
      ================================================================== */
   const CHG = {
+    balApply(el) { const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (b) b.apply = el.checked; },
+    balAcct(el) {
+      const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (!b) return;
+      b.accountId = el.value; const a = state.accounts.find((x) => x.id === el.value);
+      b.known = a ? acctAsOf(a) : ""; b.typedByYou = !!(a && (!a.asOf || (a.manualOn && a.manualOn > a.asOf)));
+      b.newer = !a || !b.known || (b.typedByYou ? b.date > b.known : b.date >= b.known);
+      b.apply = b.days <= 31 && b.newer; render();
+    },
     importSkip(el) { const p = pendingImport; if (!p) return; p.skip = p.skip || {}; p.skip[+el.dataset.i] = !el.checked; const n = p.rows.length - Object.values(p.skip).filter(Boolean).length; const b = $('[data-act="doImport"]'); if (b) b.lastChild.textContent = " Import " + n; },
     receiptFile(el) { const f = el.files && el.files[0]; el.value = ""; handleReceiptFile(f); },
     mascotStyle(el) { state.ui.mascot = el.value; save(); render(); burst(["💖", "✨", "🐷"], 8, 0.6); toast("🐷 " + esc(C.mascotName || "Penny") + " loves the new look!"); },
@@ -3301,7 +3385,7 @@
       const g = state.goals.find((x) => x.id === el.dataset.id);
       readPhoto(el.files && el.files[0], (url) => { g.photo = url; commit(icon("image") + " Photo added"); });
     },
-    acctBal(el) { const a = state.accounts.find((x) => x.id === el.dataset.id); a.balance = num(el.value); a.example = false; a.updated = todayISO(); snapshotNet(); commit(); },
+    acctBal(el) { const a = state.accounts.find((x) => x.id === el.dataset.id); a.balance = num(el.value); a.example = false; a.updated = todayISO(); a.manualOn = todayISO(); delete a.asOf; snapshotNet(); commit(); },
     showTaxCal(el) { state.ui.showTaxCal = el.checked; commit(); },
     theme(el) { state.ui.theme = el.value; applyTheme(); save(); },
     restore(el) {
