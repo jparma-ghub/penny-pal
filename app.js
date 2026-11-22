@@ -2675,6 +2675,16 @@
       '<input type="file" multiple accept=".csv,text/csv,.pdf,application/pdf,image/*" data-change="importFile" hidden></label></div>');
   }
 
+  // The transactions behind a budget card: tap to open, move any of them to another category right there
+  function catBreakdown(c, ym) {
+    const list = state.transactions.filter((t) => t.cat === c.id && t.date.startsWith(ym)).sort((a, b) => b.date.localeCompare(a.date));
+    if (!list.length) return '<p class="tiny muted cat-none">No transactions here in ' + esc(monthLabel(ym)) + " yet.</p>";
+    return '<details class="cat-break" data-key="cat-' + c.id + '"><summary>See ' + list.length + (list.length === 1 ? " transaction" : " transactions") + "</summary>" +
+      '<div class="cat-break-list">' + list.map((t) => '<div class="cb-row"><div class="cb-main"><div class="cb-desc">' + esc(t.desc) + exTag(t) + '</div><div class="tiny muted">' + esc(dayLabel(parseISO(t.date))) + " · " + (t.kind === "income" ? '<span class="good">+' : "-") + money2(t.amount) + (t.kind === "income" ? "</span>" : "") + "</div></div>" +
+        '<select data-change="txCatInline" data-id="' + t.id + '" aria-label="Move ' + esc(t.desc) + ' to another category">' + catOptions(t.cat) + "</select>" +
+        '<button class="iconbtn" data-act="editTx" data-id="' + t.id + '" title="Edit">' + icon("pencil") + "</button></div>").join("") + "</div></details>";
+  }
+
   /* PAGE: Budgets ----------------------------------------------------- */
   PAGES.budgets = {
     render() {
@@ -2702,7 +2712,7 @@
               return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : !c.budget ? (sp ? "Spent " + money(sp) + ", no budget yet" : "No budget yet") : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div></div>" +
                 '<button class="iconbtn" data-act="editCat" data-id="' + c.id + '" title="Edit category">' + icon("pencil") + "</button></div>" + bar(p, g === "save") +
                 (billsFor(c.id).length ? '<div class="tiny muted bills-in">📺 Bills: ' + billsFor(c.id).map((x) => esc(x.name) + " " + money2(monthlyCost(x))).join(", ") + (billsFor(c.id).length > 1 ? " = " + money2(billsMonthly(c.id)) : "") + " a month</div>" : "") +
-                '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || "") + '" placeholder="0" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div></div>';
+                '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || "") + '" placeholder="0" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div>' + catBreakdown(c, ym) + "</div>";
             }).join("") + "</div></div>";
         }).join("") +
         '<div class="card"><div class="card-head"><h2>💡 Tips for you</h2>' + (pennyOn() ? mascot(64, "P", "thinking") : "") + '</div><div class="tip-list">' + smartTips().map(([cls, ic, html]) => '<div class="callout ' + cls + '">' + icon(ic) + "<div>" + html + "</div></div>").join("") + "</div></div>" +
@@ -3079,11 +3089,12 @@
     if (!state.isExample) coverBills(); // budgets always include the bills you've entered
     // redrawing the same page keeps your place: scroll position, open sections, scrolled lists
     const samePage = lastPage === id, view = $("#view");
-    const keep = samePage ? { y: window.scrollY, open: Array.from(view.querySelectorAll("details")).map((d) => d.open), boxes: Array.from(view.querySelectorAll(".table-wrap, .import-table")).map((t) => t.scrollTop) } : null;
+    const keep = samePage ? { y: window.scrollY, open: Array.from(view.querySelectorAll("details:not([data-key])")).map((d) => d.open), keyed: Array.from(view.querySelectorAll("details[data-key]")).filter((d) => d.open).map((d) => d.dataset.key), boxes: Array.from(view.querySelectorAll(".table-wrap, .import-table")).map((t) => t.scrollTop) } : null;
     pageSrcs = new Set();
     try { view.innerHTML = page.render(); if (page.after) page.after(); } finally { pageSrcs = null; }
     if (keep) {
-      view.querySelectorAll("details").forEach((d, i) => { if (keep.open[i] !== undefined) d.open = keep.open[i]; });
+      view.querySelectorAll("details:not([data-key])").forEach((d, i) => { if (keep.open[i] !== undefined) d.open = keep.open[i]; });
+      keep.keyed.forEach((k) => { const d = view.querySelector('details[data-key="' + k + '"]'); if (d) d.open = true; });
       view.querySelectorAll(".table-wrap, .import-table").forEach((t, i) => { if (keep.boxes[i]) t.scrollTop = keep.boxes[i]; });
       if (Math.abs(window.scrollY - keep.y) > 1) window.scrollTo(0, keep.y);
     }
@@ -3594,7 +3605,7 @@
     celebrate(el) { state.ui.celebrate = el.checked; save(); if (el.checked) celebrate("save", { title: "Celebrations on!", sub: "Get ready for confetti 🎉" }); },
     txSearch(el) { if (state.ui.q === el.value) return; state.ui.q = el.value; render(); const s = $('[data-change="txSearch"]'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } },
     txCat(el) { state.ui.cat = el.value; render(); },
-    txCatInline(el) { const t = state.transactions.find((x) => x.id === el.dataset.id); t.cat = el.value; t.kind = kindForCat(el.value, t.kind); t.recatOn = todayISO(); commit("Moved to " + catById(el.value).name); },
+    txCatInline(el) { const t = state.transactions.find((x) => x.id === el.dataset.id); t.cat = el.value; t.kind = kindForCat(el.value, t.kind); t.recatOn = todayISO(); commit("Moved " + esc(t.desc) + " to " + esc(catById(el.value).name)); },
     importCat(el) {
       const p = pendingImport, r = p && p.rows[+el.dataset.i]; if (!r) return;
       r.cat = el.value; r.kind = kindForCat(el.value, r.kind); r.picked = true;

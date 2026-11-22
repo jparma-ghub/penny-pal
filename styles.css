@@ -889,3 +889,20 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .seg-sm button { padding: 5px 10px; font-size: .82rem; }
 .all-time-label { font-family: var(--font-display, inherit); font-size: 1.05rem; }
 .month-head { margin: 18px 0 2px; font-size: 1.05rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+
+/* Budget card breakdown */
+.cat-break { border-top: 1px dashed var(--line); padding-top: 8px; }
+.cat-break summary { cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--accent); list-style: none; display: flex; align-items: center; gap: 6px; }
+.cat-break summary::-webkit-details-marker { display: none; }
+.cat-break summary::after { content: "▾"; transition: transform .2s; }
+.cat-break[open] summary::after { transform: rotate(180deg); }
+.cat-break-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 320px; overflow: auto; }
+.cb-row { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); }
+.cb-main { flex: 1; min-width: 0; }
+.cb-desc { font-size: .84rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cb-row select { width: auto; max-width: 130px; font-size: .78rem; padding: 4px 6px; flex: none; }
+.cat-none { margin: 0; border-top: 1px dashed var(--line); padding-top: 8px; }
+.cb-row { flex-wrap: wrap; row-gap: 4px; }
+.cb-main { flex: 1 1 100%; }
+.cb-desc { white-space: normal; overflow: visible; word-break: break-word; line-height: 1.3; }
+.cb-row select { flex: 1 1 0; max-width: none; min-width: 0; }

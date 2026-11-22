@@ -30,8 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "4.4",
+  version: "4.5",
   whatsNew: [
+    "👛 Tap See transactions on any budget to see what's in it, and move anything to another category right there",
     "📚 See and search all your transactions at once with the new All time view",
     "☑️ Select many transactions at once and move them to a category in one tap",
     "🧠 Penny now knows hundreds of Canadian stores and sorts them for you. Try ✨ Sort my Other on Transactions",
