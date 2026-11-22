@@ -83,8 +83,8 @@ window.CONFIG = {
   // Leave url empty to turn sync off. The anon key is meant to be public:
   // the database rules only let each person read and change their own data.
   sync: {
-    url: "",        // e.g. "https://abcdefgh.supabase.co"
-    anonKey: "",    // the "anon public" or "publishable" key
+    url: "https://rineygmstdjhregngbrd.supabase.co",        // e.g. "https://abcdefgh.supabase.co"
+    anonKey: "sb_publishable_n2_WhsMlH06_1dwkfY01aw_8-kbQUE8",    // the "anon public" or "publishable" key
     website: "https://jparma-ghub.github.io/penny-pal/"
   },
 
