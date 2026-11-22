@@ -30,8 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "4.0",
+  version: "4.1",
   whatsNew: [
+    "🛡️ Safer syncing: an empty phone or laptop can never wipe out your real data, and Penny tells you exactly what came over when you sign in",
     "⚖️ Importing a recent statement can update your balance on The Pig Picture. You always confirm first, and numbers you type yourself are never replaced by older statements",
     "🏦 Statements with funds out / funds in / balance columns (like TD) now read correctly. Balances are never counted",
     "🏷️ Pick the category for each transaction before you import",

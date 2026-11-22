@@ -1857,7 +1857,18 @@
     await sb("/rest/v1/penny_data?on_conflict=user_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: sync.userId, data: await lockData(data), updated_at: at }) });
     sync.seen = at; sync.dirty = false; saveSync(); lastPushed = json;
   }
+  const SNAP_KEY = "pennyPal.beforeSync";
+  function snapshotBeforeSync() {
+    try {
+      if (dataWeight(state) === 0) return;
+      const list = JSON.parse(localStorage.getItem(SNAP_KEY) || "[]");
+      list.unshift({ at: new Date().toISOString(), weight: dataWeight(state), data: JSON.stringify(state) });
+      localStorage.setItem(SNAP_KEY, JSON.stringify(list.slice(0, 3)));
+    } catch (e) { /* storage full: keep going */ }
+  }
+  function lastSnapshot() { try { return (JSON.parse(localStorage.getItem(SNAP_KEY) || "[]") || [])[0] || null; } catch (e) { return null; } }
   function applyRemote(row, quiet) {
+    snapshotBeforeSync(); // a copy of this device's data, so a sync can always be undone
     const keepWeather = state.ui && state.ui.weather;
     applyingRemote = true;
     try { state = normalize(row.data); if (keepWeather) state.ui.weather = keepWeather; checkIn(); applyTheme(); evaluate(); save(); }
@@ -1881,13 +1892,19 @@
     try {
       const row = await sbRow();
       let pushed = false;
-      if (row && row.updated_at !== sync.seen) {
+      const mine = dataWeight(state), theirsW = row ? dataWeight(row.data) : 0;
+      if (row && theirsW > 0 && mine === 0) {
+        // this device is empty but the account has real data: always bring it in, never push empty over it
+        applyRemote(row, true); toast("☁️ Brought over " + esc(whatCameOver(state)) + " from your account");
+      } else if (row && row.updated_at !== sync.seen) {
         // someone else (your other device) saved since we last looked
         const theirs = Date.parse(row.updated_at) || 0;
-        if (!sync.dirty || theirs > (sync.editedAt || 0)) applyRemote(row);
+        if (theirsW === 0 && mine > 0) { await sbPush(); pushed = true; } // never let an empty save wipe this device
+        else if (mine >= 4 && theirsW < mine * 0.5) { askWhichToKeep(row); syncBusy = false; return; } // the other device has much less: ask first
+        else if (!sync.dirty || theirs > (sync.editedAt || 0)) applyRemote(row);
         else { await sbPush(); pushed = true; }
       } else if (sync.dirty || !row) {
-        if (!state.isExample) { await sbPush(); pushed = true; }
+        if (!state.isExample && !(mine === 0 && theirsW > 0)) { await sbPush(); pushed = true; }
       }
       // data saved before locking existed gets locked right away
       if (row && !row.wasLocked && !pushed && !state.isExample) await sbPush();
@@ -1899,12 +1916,33 @@
       if (manual) toast(esc(syncNote || "Couldn't sync right now"));
     } finally { syncBusy = false; if (pageId() === "mydata") render(); }
   }
+  // How much real stuff is in a profile? Used so an empty device can never wipe out real data.
+  function dataWeight(d) {
+    if (!d || d.isExample) return 0;
+    const n = (x) => (Array.isArray(x) ? x.filter((i) => i && !i.example).length : 0);
+    return n(d.transactions) + n(d.goals) * 2 + n(d.subs) + n(d.accounts) * 2 + ((d.categories || []).some((c) => c.touched || +c.budget > 0) ? 2 : 0) + (d.tax && +d.tax.income ? 2 : 0) + (d.profile && d.profile.name ? 1 : 0);
+  }
+  function whatCameOver(d) {
+    const n = (x) => (Array.isArray(x) ? x.filter((i) => i && !i.example).length : 0), bits = [];
+    const add = (k, one, many) => { const c = n(d[k]); if (c) bits.push(c + " " + (c === 1 ? one : many)); };
+    add("transactions", "transaction", "transactions"); add("goals", "goal", "goals"); add("subs", "bill", "bills"); add("accounts", "account", "accounts");
+    return bits.length ? bits.join(", ") : "your profile";
+  }
+  function askWhichToKeep(row) {
+    if ($(".keep-choice")) return;
+    const r = row.data || {}, n = (x) => (Array.isArray(x) ? x.filter((i) => i && !i.example).length : 0);
+    window.__syncChoice = row;
+    openModal('<div class="stack keep-choice"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(90, "P", "thinking") : "") + '<div><h2>Which data should Penny keep?</h2><p class="small muted">Another device saved a version with a lot less in it. Penny didn\'t change anything yet. Pick the one that\'s right, and the other device will match it.</p></div></div>' +
+      '<div class="grid g2"><button class="pick" data-act="syncKeepAccount"><span class="pick-emoji">☁️</span><b>The other device</b><span class="tiny muted">' + n(r.transactions) + " transactions, " + n(r.goals) + " goals, " + n(r.accounts) + " accounts<br>Saved " + esc(new Date(row.updated_at).toLocaleString(C.locale)) + "</span></button>" +
+      '<button class="pick" data-act="syncKeepDevice"><span class="pick-emoji">💻</span><b>This device</b><span class="tiny muted">' + n(state.transactions) + " transactions, " + n(state.goals) + " goals, " + n(state.accounts) + " accounts</span></button></div>" +
+      '<p class="tiny muted">Not sure? Keep the one with more of your real stuff. You can also download a backup in My Stash first.</p></div>');
+  }
   async function syncFirstLink() {
     // just signed in: decide whose data wins
     const row = await sbRow();
     const local = state, localHas = !local.isExample && (local.transactions.length || local.goals.length || local.profile.name || (local.tax && local.tax.income));
     if (!row) { sync.seen = null; if (!local.isExample) { await sbPush(); toast("☁️ Your data is now saved to your account"); } return; }
-    if (!localHas) { applyRemote(row, true); toast("☁️ Welcome back! Your data is here"); return; }
+    if (!localHas || dataWeight(state) === 0) { applyRemote(row, true); toast("☁️ Brought over " + esc(whatCameOver(state)) + " from your account"); return; }
     if (JSON.stringify(row.data) === JSON.stringify(shareable())) { sync.seen = row.updated_at; saveSync(); return; }
     const r = row.data || {}, n = (x) => (x && x.length) || 0;
     window.__syncChoice = row;
@@ -1949,6 +1987,13 @@
       '<button type="button" class="linklike tiny muted" data-act="wzAuthSkip">Skip for now (your data stays on this device only)</button></div>';
     const first = el.querySelector(wzAuthEmail || sync.email ? "input[name=password]" : "input[name=email]"); if (first) setTimeout(() => first.focus(), 50);
   }
+  // Signed in, but nothing saved on the account yet: explain instead of silently starting blank
+  function wzSignedInEmpty() {
+    const el = wizardEl();
+    el.innerHTML = '<div class="wz-inner wz-center">' + mascot(140, null, "thinking") + "<h1>You're signed in, but there's nothing saved yet</h1>" +
+      '<p class="wz-sub">Penny couldn\'t find any data on your account. If you set things up on another phone or computer, open Penny there first and tap <b>My Stash → Sync now</b>. Then come back and tap Check again.</p>' +
+      '<div class="stack" style="width:100%;max-width:360px"><button class="btn big-btn" data-act="wzCheckAgain">🔄 Check again</button><button class="btn ghost" data-act="wzSetupHere">Set up here instead</button></div></div>';
+  }
   function wzAuthShow(msg, busy) {
     // update the message and button in place, so nothing you typed gets wiped
     wzAuthMsg = msg; wzAuthBusy = !!busy;
@@ -1966,11 +2011,14 @@
       wzAuthBusy = false;
       if (!b || !b.access_token) { sync.email = email; saveSync(); wzAuthMode = "signin"; wzAuthMsg = "Almost there! Check your email for a confirmation link, then sign in here."; return renderAccountStep(); }
       takeSession(b); sync.dirty = false; sync.seen = null; sync.lastSync = Date.now(); await setKey(password); syncState = "ok";
-      const row = await sbRow().catch(() => null);
-      if (row && row.data) { // returning person on a new device: bring their stuff over and skip setup
-        closeWizard(); applyRemote(row, true); render(); toast("☁️ Welcome back" + (state.profile.name ? ", " + esc(state.profile.name) : "") + "! All your stuff is here");
+      let row;
+      try { row = await sbRow(); }
+      catch (e) { if (kind === "signup") row = null; else return wzAuthShow("You're signed in, but Penny couldn't reach your saved data right now (" + (/permission|42501/i.test(e.message) ? "the sync server needs its permissions fixed" : "check your internet") + "). Try again in a moment.", false); }
+      if (row && row.data && dataWeight(row.data) > 0) { // returning person on a new device: bring their stuff over and skip setup
+        closeWizard(); applyRemote(row, true); render(); toast("☁️ Welcome back" + (state.profile.name ? ", " + esc(state.profile.name) : "") + "! Brought over " + esc(whatCameOver(state)));
         return;
       }
+      if (kind === "signin") { wzSignedInEmpty(); return; }
       if (kind === "signup") award(25, "Account created", true);
       wzMsg = kind === "signup" ? "Account made! 🎉 Now let's set up your money home." : "Signed in! Let's set up your money home.";
       ACT.startSetup(true);
@@ -2006,7 +2054,8 @@
     else if (signedIn()) body = '<div class="callout">' + icon("check") + '<div><b>Sync is on</b> for ' + esc(sync.email || "your account") + '.<br><span class="small muted">Last synced ' + ago(sync.lastSync) + (syncState === "syncing" ? " · syncing..." : "") + "</span></div></div>" +
       (syncNote ? '<p class="small" style="color:var(--warn)">' + esc(syncNote) + "</p>" : "") +
       '<p class="small muted">Sign in with this same email on your other phone or laptop and everything follows you. If two devices change things at the same time, the most recent change wins.</p>' +
-      '<div class="row"><button class="btn" data-act="syncNow">' + icon("refresh-cw") + ' Sync now</button><button class="btn ghost" data-act="syncSignOut">Sign out</button></div>';
+      '<div class="row"><button class="btn" data-act="syncNow">' + icon("refresh-cw") + ' Sync now</button><button class="btn ghost" data-act="syncSignOut">Sign out</button></div>' +
+      (lastSnapshot() ? '<p class="tiny muted">Something look wrong after a sync? <button type="button" class="linklike tiny" data-act="undoSync">Undo last sync</button> brings back this device\'s data from ' + esc(new Date(lastSnapshot().at).toLocaleString(C.locale)) + ".</p>" : "");
     else body = '<p class="small">Use the same email and password on your phone and laptop, and Penny keeps them matched automatically. Your data is locked with your password before it leaves the device, so only you can read it.</p>' +
       (syncNote ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(syncNote) + "</div></div>" : "") +
       '<form data-form="syncSignIn" class="stack" autocomplete="on">' + field("Email", '<input type="email" name="email" autocomplete="email" required value="' + esc(sync.email || "") + '" placeholder="you@example.com">') +
@@ -3064,6 +3113,21 @@
      Button actions
      ================================================================== */
   const ACT = {
+    undoSync() {
+      const snap = lastSnapshot(); if (!snap) return toast("Nothing to undo");
+      try {
+        state = normalize(JSON.parse(snap.data)); applyTheme(); evaluate(); save();
+        try { const list = JSON.parse(localStorage.getItem(SNAP_KEY) || "[]"); list.shift(); localStorage.setItem(SNAP_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+        if (signedIn()) { sync.dirty = true; sync.editedAt = Date.now(); saveSync(); sbPush().then(() => toast("☁️ Restored and saved to your account")).catch(() => toast("Restored on this device. It'll save to your account on the next sync.")); }
+        render(); toast(icon("check") + " This device's data is back");
+      } catch (e) { toast("Couldn't undo that one, sorry."); }
+    },
+    async wzCheckAgain() {
+      try { const row = await sbRow(); if (row && row.data && dataWeight(row.data) > 0) { closeWizard(); applyRemote(row, true); render(); toast("☁️ Found it! Brought over " + esc(whatCameOver(state))); return; } }
+      catch (e) { /* fall through */ }
+      toast("Still nothing saved on this account. Open Penny on your other device and tap Sync now there first.");
+    },
+    wzSetupHere() { wzMsg = "Signed in! Let's set up your money home."; ACT.startSetup(true); },
     wzAddAcct() { const box = $("#wzAccts"); if (!box) return; box.insertAdjacentHTML("beforeend", wzAcctRow({ type: "savings" })); const last = box.lastElementChild; if (last) { const n = last.querySelector('input[name="acctAmt"]'); if (n) n.focus(); } const f = $("#wzForm"); if (f) f.dataset.touched = "1"; },
     wzDelAcct(el) { const row = el.closest(".wz-acct"); const box = $("#wzAccts"); if (row && box && box.children.length > 1) row.parentNode.removeChild(row); else if (row) row.querySelectorAll("input:not([type=hidden])").forEach((i) => { i.value = ""; }); },
     openFeed() { feedModal(); },
@@ -3407,7 +3471,7 @@
   function formData(f) { const d = {}; new FormData(f).forEach((v, k) => (d[k] = v)); return d; }
   /* "Just look around" mode: example data you can browse but not change */
   const LOOK_OK_ACTS = new Set(["openFeed", "month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
-    "wzStart", "wzSignIn", "wzAuthToggle", "wzAuthSkip", "wzExample", "wzHome", "wzLater", "wzBack", "wzSkip", "wzCheckin"]);
+    "wzStart", "wzSignIn", "wzAuthToggle", "wzAuthSkip", "wzCheckAgain", "wzSetupHere", "wzExample", "wzHome", "wzLater", "wzBack", "wzSkip", "wzCheckin"]);
   const LOOK_OK_CHANGES = new Set(["txSearch", "txCat", "calmMode", "celebrate"]);
   function lookOnlyBlocks(el, kind) {
     if (!state || !state.isExample || !el || !el.closest) return false;
