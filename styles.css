@@ -886,3 +886,6 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .sort-row select { width: auto; max-width: 170px; flex: none; }
 .sort-row .t { font-weight: 600; font-size: .9rem; }
 @media (max-width: 560px) { .sort-row { flex-wrap: wrap; } .sort-row select { flex: 1 1 100%; max-width: none; } }
+.seg-sm button { padding: 5px 10px; font-size: .82rem; }
+.all-time-label { font-family: var(--font-display, inherit); font-size: 1.05rem; }
+.month-head { margin: 18px 0 2px; font-size: 1.05rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }

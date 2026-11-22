@@ -2585,6 +2585,7 @@
     return { rows, dupes: all.length - rows.length, skip };
   }
 
+  let txLimit = 300;
   /* Batch select on the Transactions list */
   let selMode = false; const selIds = new Set(); window.__lastShown = [];
   function sortOtherModal(tips, left) {
@@ -2606,34 +2607,41 @@
   let pendingImport = null;
   PAGES.spending = {
     render() {
-      const ym = state.ui.month, q = (state.ui.q || "").toLowerCase(), cf = state.ui.cat;
-      let tx = state.transactions.filter((t) => t.date.startsWith(ym));
+      const ym = state.ui.month, q = (state.ui.q || "").toLowerCase(), cf = state.ui.cat, all = !!state.ui.txAll;
+      let tx = all ? state.transactions.slice() : state.transactions.filter((t) => t.date.startsWith(ym));
       if (q) tx = tx.filter((t) => (t.desc + " " + catById(t.cat).name).toLowerCase().includes(q));
       if (cf !== "all") tx = tx.filter((t) => t.cat === cf);
       tx.sort((a, b) => b.date.localeCompare(a.date));
       const m = monthStats(ym);
-      const byDay = {}; for (const t of tx) (byDay[t.date] = byDay[t.date] || []).push(t);
+      // totals for exactly what's shown (this month, or everything you've entered)
+      const shownIn = tx.filter((t) => t.kind === "income").reduce((a, t) => a + +t.amount, 0), shownOut = tx.filter((t) => t.kind !== "income").reduce((a, t) => a + +t.amount, 0);
+      const total = tx.length, limit = all ? txLimit : Infinity, cut = tx.length > limit;
+      const showTx = cut ? tx.slice(0, limit) : tx;
+      const byDay = {}; for (const t of showTx) (byDay[t.date] = byDay[t.date] || []).push(t);
       const catOpts = (sel, kind) => state.categories.filter((c) => (kind === "income") === (c.group === "income")).concat(kind === "income" ? [] : [OTHER]).map((c) => '<option value="' + c.id + '"' + (c.id === sel ? " selected" : "") + ">" + esc(c.name) + "</option>").join("");
 
       return '<div class="page">' + exampleNote() +
         head("Transactions", "Everything coming in and going out. Change a category right in the list and the app learns.",
           '<button class="btn ghost" data-act="toggleImport">' + icon("upload") + ' Import from bank</button><button class="btn ghost" data-act="scanReceipt">' + icon("camera") + ' Scan a receipt</button><button class="btn" data-act="addTx">' + icon("plus") + " Add</button>") +
         '<div class="card" id="importBox"' + (pendingImport ? "" : " hidden") + ">" + importBox() + "</div>" + sixMonthChart(ym) +
-        '<div class="card"><div class="row between" style="margin-bottom:12px">' + monthNav() +
+        '<div class="card"><div class="row between" style="margin-bottom:12px"><div class="row" style="gap:10px">' + (all ? '<b class="all-time-label">📚 All time</b>' : monthNav()) +
+          '<div class="seg seg-sm" role="group" aria-label="Show"><button class="' + (all ? "" : "on") + '" data-act="txScope" data-v="month">This month</button><button class="' + (all ? "on" : "") + '" data-act="txScope" data-v="all">All time</button></div></div>' +
         '<div class="row"><input type="search" placeholder="Search" data-change="txSearch" value="' + esc(state.ui.q) + '" style="width:170px" aria-label="Search transactions">' +
         '<select data-change="txCat" style="width:auto" aria-label="Filter by category"><option value="all">All categories</option>' + state.categories.concat([OTHER]).map((c) => '<option value="' + c.id + '"' + (cf === c.id ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</select></div></div>" +
-        '<div class="row small muted" style="margin-bottom:6px;gap:16px"><span>In: <b class="good">' + money2(m.income) + '</b></span><span>Out: <b>' + money2(m.spent + m.savedTx) + "</b></span><span>" + tx.length + " shown</span>" +
+        '<div class="row small muted" style="margin-bottom:6px;gap:16px"><span>In: <b class="good">' + money2(shownIn) + '</b></span><span>Out: <b>' + money2(shownOut) + "</b></span><span>" + total + (all ? " in total" : " shown") + "</span>" +
           '<span class="row" style="margin-left:auto;gap:8px">' + (tx.some((t) => t.cat === "other" && t.kind === "expense") || state.transactions.some((t) => !t.example && t.cat === "other") ? '<button class="btn soft sm" data-act="sortOther">✨ Sort my Other</button>' : "") +
           '<button class="btn ' + (selMode ? "" : "ghost ") + 'sm" data-act="selToggle">' + (selMode ? "Done selecting" : "☑️ Select") + "</button></span></div>" +
         (selMode ? selectBar(tx) : "") +
-        (tx.length ? Object.entries(byDay).map(([d, list]) =>
-          '<div class="label" style="margin-top:12px">' + parseISO(d).toLocaleDateString(C.locale, { weekday: "short", month: "short", day: "numeric" }) + '</div><div class="list">' +
+        ((window.__lastMonthHead = ""), tx.length ? Object.entries(byDay).map(([d, list]) =>
+          (all && (d.slice(0, 7) !== (window.__lastMonthHead || "")) ? (window.__lastMonthHead = d.slice(0, 7), '<h3 class="month-head">' + esc(monthLabel(d.slice(0, 7))) + "</h3>") : "") +
+          '<div class="label" style="margin-top:12px">' + parseISO(d).toLocaleDateString(C.locale, all ? { weekday: "short", month: "short", day: "numeric", year: "numeric" } : { weekday: "short", month: "short", day: "numeric" }) + '</div><div class="list">' +
           list.map((t) => { const c = catById(t.cat); return '<div class="item tx-item' + (selMode && selIds.has(t.id) ? " picked" : "") + '">' + (selMode ? '<input type="checkbox" class="tx-pick" data-change="txPick" data-id="' + t.id + '"' + (selIds.has(t.id) ? " checked" : "") + ' aria-label="Select ' + esc(t.desc) + '">' : "") + bubble(c.icon, c.color) +
             '<div class="grow"><div class="t">' + esc(t.desc) + exTag(t) + '</div><div class="tiny muted">' + esc(c.name) + "</div></div>" +
             '<select data-change="txCatInline" data-id="' + t.id + '" aria-label="Category">' + catOptions(t.cat) + "</select>" +
             '<span class="amt ' + (t.kind === "income" ? "good" : "") + '">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</span>" +
             '<button class="iconbtn" data-act="editTx" data-id="' + t.id + '" title="Edit">' + icon("pencil") + '</button><button class="iconbtn del" data-act="delTx" data-id="' + t.id + '" title="Delete">' + icon("trash-2") + "</button></div>"; }).join("") + "</div>").join("")
-          : '<div class="empty">' + icon("receipt") + "<p>Nothing here for " + monthLabel(ym) + ". Add one, or import a file from your bank.</p></div>") +
+          : '<div class="empty">' + icon("receipt") + "<p>" + (q || cf !== "all" ? "Nothing matches that " + (all ? "in all your transactions" : "in " + monthLabel(ym) + (all ? "" : '. <button class="linklike" data-act="txScope" data-v="all">Search all time</button>')) : "Nothing here for " + monthLabel(ym) + ". Add one, or import a file from your bank.") + "</p></div>") +
+        (cut ? '<div class="row" style="justify-content:center;margin-top:12px"><button class="btn soft" data-act="txMore">Show more (' + (total - limit) + " left)</button></div>" : "") +
         "</div>" +
         '<details class="card"><summary style="cursor:pointer"><b>' + icon("sparkles") + " Auto-sort rules</b> <span class=\"muted small\">(" + state.rules.length + " rules)</span></summary>" +
         '<p class="small muted" style="margin:10px 0">When a bank description contains these words, it goes into that category. Great for imports.</p>' +
@@ -3223,6 +3231,8 @@
      Button actions
      ================================================================== */
   const ACT = {
+    txScope(el) { state.ui.txAll = el.dataset.v === "all"; txLimit = 300; save(); window.scrollTo(0, 0); lastPage = null; render(); },
+    txMore() { txLimit += 300; render(); },
     selToggle() { selMode = !selMode; selIds.clear(); render(); },
     selMove() {
       const cat = ($("#selCat") || {}).value, learn = ($("#selLearn") || {}).checked; if (!cat || !selIds.size) return;
