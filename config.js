@@ -30,10 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and REPLACE whatsNew with only that update's changes.
   // People who already use the app see a "What's new" popup once. Keep it short.
-  version: "4.8",
+  version: "4.9",
   whatsNew: [
-    "📱 Screenshots from your banking app now work, for chequing and credit cards (dark mode and iPhone HEIC pictures too)",
-    "💳 Paying your credit card from chequing now counts as moving money, so your spending isn't counted twice",
+    "🔁 E-transfers to a person (even one with your name) now stay as normal spending. Interbank transfer is only picked for clear transfers like \"TRANSFER TO SAVINGS\" or a credit card payment",
   ],
   locale: "en-CA",
   currency: "CAD",

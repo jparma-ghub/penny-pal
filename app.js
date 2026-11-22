@@ -210,6 +210,14 @@
     if (h.price === 750000 && h.monthlySave === 800) Object.assign(h, { price: 0, monthlySave: 0, monthlyCosts: h.monthlyCosts === 650 ? 0 : h.monthlyCosts });
   }
   function movePass(s) {
+    if (s && !s.isExample && !(s.flags && s.flags.nameUndo)) {
+      s.flags = s.flags || {}; s.flags.nameUndo = true;
+      (s.transactions || []).forEach((t) => {
+        const d = String(t.desc || "");
+        if (t.cat !== "transfer" || t.recatOn || t.example || !/E-?TRANSFER|E-?TFR/i.test(d) || TRANSFER_RX.test(d) || CARD_PAY_RX.test(d)) return;
+        t.cat = t.kind === "income" ? (ETRANSFER_IN.test(d) && (s.categories || []).some((c) => c.id === "payback") ? "payback" : "pay") : "other";
+      });
+    }
     if (s && !s.isExample && s.flags && s.flags.movePass && !s.flags.cardPass && (s.categories || []).some((c) => c.id === "transfer")) {
       s.flags.cardPass = true;
       (s.transactions || []).forEach((t) => { if (!t.recatOn && !t.example && t.cat !== "transfer" && CARD_PAY_RX.test(String(t.desc || "")) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(String(t.desc || ""))) t.cat = "transfer"; });
@@ -218,12 +226,10 @@
     s.flags = s.flags || {}; s.flags.cardPass = true;
     if (!(s.categories || []).some((c) => c.id === "transfer")) return;
     s.flags = s.flags || {}; s.flags.movePass = true;
-    const me = String((s.profile && s.profile.name) || "").trim().split(/\s+/)[0];
     (s.transactions || []).forEach((t) => {
       if (t.recatOn || t.example) return;
       const d = String(t.desc || "");
-      const own = me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d);
-      if (own || TRANSFER_RX.test(d) || (CARD_PAY_RX.test(d) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(d))) t.cat = "transfer";
+      if (TRANSFER_RX.test(d) || (CARD_PAY_RX.test(d) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(d))) t.cat = "transfer";
       else if (t.kind === "income" && (t.cat === "pay" || t.cat === "other") && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) t.cat = "payback";
     });
   }
@@ -806,8 +812,6 @@
   const ETRANSFER_IN = /E-?TRANSFER (RECEIVED|DEPOSIT|RCVD|FROM|RECV)|E-?TFR (RCVD|IN)|AUTODEPOSIT|AUTO-DEPOSIT|INTERAC E-?TRANSFER(?!.*\b(SEND|SENT)\b)/i;
   function moneyMove(desc, kind) {
     const d = String(desc || "");
-    const me = String((state.profile && state.profile.name) || "").trim().split(/\s+/)[0];
-    if (me && me.length >= 3 && /E-?TRANSFER|E-?TFR|TRANSFER|TFR/i.test(d) && new RegExp("\\b" + me.replace(/[^a-z]/gi, "") + "\\b", "i").test(d)) return { cat: "transfer", why: "an e-transfer with your own name, so it's your money moving" };
     if (CARD_PAY_RX.test(d) && !/CASH ?BACK|REWARD|INTEREST|FEE\b/i.test(d)) return { cat: "transfer", why: "a credit card payment, and the card statement already counts what you bought" };
     if (TRANSFER_RX.test(d)) return { cat: "transfer", why: "it looks like money moving between your own accounts" };
     if (kind === "income" && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) return { cat: "payback", why: "an e-transfer from someone, like a friend paying you back" };
