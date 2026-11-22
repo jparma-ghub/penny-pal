@@ -64,13 +64,13 @@
       v: 1, isExample: false,
       profile: { name: "", xp: 0, streak: 0, bestStreak: 0, lastCheckIn: null, quests: {}, badges: {}, lessons: {} },
       flags: {},
-      categories: C.categories.map((c) => Object.assign({}, c)),
+      categories: C.categories.map((c) => Object.assign({}, c, { budget: 0 })), // you set every budget yourself
       rules: C.autoRules.map(([match, cat]) => ({ match, cat })),
       transactions: [], subs: [], goals: [], accounts: [], netHistory: [], credit: [], reminders: [], dismissed: {},
       feed: { ticks: {}, history: {}, full: {}, coins: {}, lastYm: "" },
       tax: { income: 0, otherIncome: 0, payFrequency: "biweekly", withheldPerPay: 0, rrsp: 0, fhsa: 0, unionDues: 0, childcare: 0, rentPaid: 0 },
-      retire: { age: 28, retireAge: 65, balance: 0, monthly: 200, lump: 0, rate: 6, inflation: C.retirement.inflation, account: "RRSP", cpp: C.retirement.cppMonthlyDefault, includeGov: true },
-      house: { price: 750000, saved: 0, monthlySave: 800, down: "min", firstTime: true, toronto: true, rate: 4.5, amort: 25, monthlyCosts: 650 },
+      retire: { age: 0, retireAge: 0, balance: 0, monthly: 0, lump: 0, rate: 6, inflation: C.retirement.inflation, account: "RRSP", cpp: C.retirement.cppMonthlyDefault, includeGov: true },
+      house: { price: 0, saved: 0, monthlySave: 0, down: "min", firstTime: true, toronto: true, rate: 4.5, amort: 25, monthlyCosts: 0 },
       ui: { month: thisMonth(), theme: "", q: "", cat: "all", showTaxCal: true, retireView: "RRSP", celebrate: true, calm: false, palette: 2, seenVersion: C.version, setupDone: false, setupStep: 0 },
       path: { done: {}, custom: {}, skipped: {}, completed: {} },
       checkin: { answers: {}, done: null, rewarded: false },
@@ -88,7 +88,7 @@
     for (const c of C.categories) {
       if (seen.cats.includes(c.id)) continue;
       seen.cats.push(c.id);
-      if (!s.categories.some((x) => x.id === c.id)) { s.categories.push(Object.assign({}, c)); added.cats++; }
+      if (!s.categories.some((x) => x.id === c.id)) { s.categories.push(Object.assign({}, c, s.isExample ? {} : { budget: 0 })); added.cats++; }
     }
     const have = new Set(s.rules.map((r) => String(r.match).toUpperCase()));
     for (const r of C.autoRules) {
@@ -114,6 +114,7 @@
   function exampleState() {
     const s = blankState();
     s.isExample = true;
+    s.categories = C.categories.map((c) => Object.assign({}, c)); // sample budgets, example only
     const t = today();
     const tx = [];
     const add = (d, desc, amount, cat, kind) => { if (d <= t) tx.push({ id: uid(), date: toISO(d), desc, amount, cat, kind: kind || "expense", example: true }); };
@@ -175,8 +176,8 @@
       { date: toISO(t), score: 731, example: true }
     ];
     s.tax = { income: 68000, otherIncome: 0, payFrequency: "semimonthly", withheldPerPay: 370, rrsp: 2000, fhsa: 8000, unionDues: 0, childcare: 0, rentPaid: 22800 };
-    s.retire = Object.assign(s.retire, { age: 28, balance: 6200, monthly: 250, lump: 0 });
-    s.house = Object.assign(s.house, { saved: 12400, monthlySave: 900 });
+    s.retire = Object.assign(s.retire, { age: 28, retireAge: 65, balance: 6200, monthly: 250, lump: 0 });
+    s.house = Object.assign(s.house, { price: 750000, saved: 12400, monthlySave: 900, monthlyCosts: 650 });
     return s;
   }
 
@@ -197,9 +198,19 @@
     if (h.saved === 12400 && h.monthlySave === 900) { s.house = blankState().house; n++; }
     return n;
   }
+  function clearMadeUpDefaults(s) {
+    if (!s || s.isExample || (s.flags && s.flags.zeroDefaults)) return;
+    s.flags = s.flags || {}; s.flags.zeroDefaults = true;
+    const def = {}; C.categories.forEach((c) => { def[c.id] = c.budget; });
+    (s.categories || []).forEach((c) => { if (!c.touched && def[c.id] !== undefined && +c.budget === +def[c.id]) c.budget = 0; });
+    const r = s.retire || {};
+    if (r.age === 28 && r.retireAge === 65 && r.monthly === 200) Object.assign(r, { age: 0, retireAge: 0, monthly: 0 });
+    const h = s.house || {};
+    if (h.price === 750000 && h.monthlySave === 800) Object.assign(h, { price: 0, monthlySave: 0, monthlyCosts: h.monthlyCosts === 650 ? 0 : h.monthlyCosts });
+  }
   function normalize(saved) {
     const base = blankState(), migrating = !saved.seenDefaults;
-    purgeExample(saved);
+    purgeExample(saved); clearMadeUpDefaults(saved);
         if (migrating) saved.seenDefaults = { cats: [], rules: [] };
         for (const k of Object.keys(base)) if (saved[k] === undefined) saved[k] = base[k];
         defaultsAdded = syncDefaults(saved, migrating);
@@ -817,7 +828,9 @@
      ------------------------------------------------------------------ */
   const moneyInput = (attrs) => '<div class="money-in"><input type="number" inputmode="decimal" step="any" ' + attrs + "></div>";
   const field = (label, inner, hint) => '<label class="field">' + label + inner + (hint ? '<span class="hint">' + hint + "</span>" : "") + "</label>";
-  const bind = (path) => { const [a, b] = path.split("."); const v = state[a][b]; return 'data-bind="' + path + '" value="' + esc(v) + '"'; };
+  const bind = (path, ph) => { const [a, b] = path.split("."); const v = state[a][b]; return 'data-bind="' + path + '" value="' + esc(v === 0 ? "" : v) + '" placeholder="' + esc(ph || "0") + '"'; };
+  // Penny asks for the numbers she needs instead of guessing
+  const askCard = (pose, title, text, btn) => '<div class="card ask-card">' + (pennyOn() ? mascot(110, "P", pose) : '<div class="ci-emoji">🐷</div>') + '<div><h3>' + esc(title) + '</h3><p class="small muted">' + text + "</p>" + (btn || "") + "</div></div>";
   const monthNav = () => '<div class="row" style="gap:4px"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Previous month">' + icon("chevron-left") + '</button><b style="min-width:138px;text-align:center">' + monthLabel(state.ui.month) + '</b><button class="iconbtn" data-act="month" data-d="1" aria-label="Next month">' + icon("chevron-right") + "</button></div>";
   const exampleNote = () => state.isExample ? '<div class="callout gold example-note"><div class="example-text">' + icon("info") + '<span>You\'re looking at <b>example data</b> 👀 It\'s view only. Ready to make it yours?</span></div><div class="example-btns"><button class="btn gold sm" data-act="startSetup">Make it mine ✨</button></div></div>' : "";
   const PAGE_EMOJI = { path: "🗺️", spending: "🧾", budgets: "👛", bills: "📺", goals: "🎯", networth: "⚖️", taxes: "🍁", retirement: "🌅", house: "🔑", learn: "📚", rewards: "🏆", reminders: "🔔", mydata: "💾" };
@@ -891,9 +904,10 @@
       const ym = state.ui.month, m = monthStats(ym), b = budgetTotals();
       const isNow = ym === thisMonth(), t = today();
       const daysLeft = isNow ? daysInMonth(t.getFullYear(), t.getMonth()) - t.getDate() + 1 : 0;
-      const left = b.need + b.want - m.spent;
+      const noPlan = !state.isExample && b.need + b.want <= 0;
+      const left = noPlan ? 0 : b.need + b.want - m.spent;
       const hr = new Date().getHours();
-      const mood = heroMood(b.need + b.want - m.spent);
+      const mood = heroMood(left);
       const hello = esc(mood.greeting.replace("{hello}", ((g) => (mood.greeting.indexOf("{hello}") > 0 ? g.toLowerCase() : g))(hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening")).replace("{name}", state.profile.name ? ", " + state.profile.name : ""));
       const cats = state.categories.filter((c) => c.group !== "income" && c.group !== "save" && m.byCat[c.id]).sort((a, z) => m.byCat[z.id] - m.byCat[a.id]);
       if (m.byCat.other) cats.push(OTHER);
@@ -906,10 +920,12 @@
       const line = mood.say || (says.length ? (intro ? says[0] : says[1 + (Math.floor(Date.now() / 86400000) % Math.max(1, says.length - 1))]) : "");
       return '<div class="page home">' +
         ((img, night) => '<section class="hero' + (img ? " hero-photo" : "") + (night ? " hero-night" : "") + '"' + (img ? ' style="--hero-img:url(\'' + esc(img) + '\')"' : "") + '>')(mood.night && C.heroNightImage ? C.heroNightImage : C.heroImage, !!(mood.night && C.heroNightImage)) + '<div class="hero-row"><div class="hero-text"><p>' + hello + "</p>" +
+        (noPlan ? '<div class="label" style="margin-top:8px">Your spending plan</div><div class="big">Not set yet</div>' + (m.spent ? '<p class="small" style="margin-top:4px">Spent so far: <b>' + money(m.spent) + "</b></p>" : "") :
         '<div class="label" style="margin-top:8px">' + (left < 0 ? (isNow ? "Over plan this month by" : "Over plan by") : isNow ? "Left to spend this month" : "Left in " + monthLabel(ym)) + "</div>" +
-        '<div class="big">' + money(Math.abs(left)) + "</div>" +
+        '<div class="big">' + money(Math.abs(left)) + "</div>") +
         '<div class="chips">' +
-        (isNow ? (left > 0 ? '<span class="chip">🗓️ About ' + money(left / daysLeft) + " a day</span>" : '<span class="chip">💪 Small changes add up</span>') : "") +
+        (noPlan ? '<a class="chip chip-link" href="#budgets">👛 Set your budget</a>' : "") +
+        (isNow && !noPlan ? (left > 0 ? '<span class="chip">🗓️ About ' + money(left / daysLeft) + " a day</span>" : '<span class="chip">💪 Small changes add up</span>') : "") +
         (bill ? '<span class="chip">🔔 ' + esc(bill.text.replace(/ charges .*/, "")) + " " + (billDays === 0 ? "today" : billDays === 1 ? "tomorrow" : "in " + billDays + " days") + "</span>" : "") +
         "</div></div>" + '<div class="hero-side">' + monthNav() + '<div class="penny-speak">' + (line && pennyOn() ? '<div class="bubble-say">' + esc(line) + "</div>" : "") + mascot(170, null, mood.pose) + "</div>" + (mood.why ? '<div class="penny-why">' + esc(mood.why) + "</div>" : "") + "</div></div>" + (C.heroImage ? "" : skyline()) + "</section>" +
 
@@ -1108,7 +1124,22 @@
     if (kind === "acct") { const a = state.accounts.find((x) => x.type === key && !x.example); return a ? num(a.balance) : 0; }
     return 0;
   }
+  const ASSET_TYPES = () => C.accountTypes.filter((t) => t.kind === "asset" && t.id !== "home" && t.id !== "car");
+  function wzAcctRow(a) {
+    a = a || {};
+    return '<div class="wz-acct"><input type="hidden" name="acctId" value="' + esc(a.id || "") + '">' +
+      '<select name="acctType" aria-label="Type of account">' + ASSET_TYPES().map((t) => '<option value="' + t.id + '"' + (a.type === t.id ? " selected" : "") + ">" + esc(t.name) + "</option>").join("") + "</select>" +
+      '<input name="acctName" placeholder="Nickname (optional), e.g. EQ Bank" value="' + esc(a.name && a.name !== acctType(a.type).name ? a.name : "") + '" autocomplete="off">' +
+      moneyInput('name="acctAmt" min="0" placeholder="0" value="' + (a.id ? num(a.balance) : "") + '"') +
+      '<button type="button" class="iconbtn" data-act="wzDelAcct" aria-label="Remove this account">' + icon("x") + "</button></div>";
+  }
   function wzField(f) {
+    if (f.type === "accounts") {
+      const mine = state.accounts.filter((a) => !a.example && ASSET_TYPES().some((t) => t.id === a.type));
+      const rows = mine.length ? mine.map(wzAcctRow) : (f.starters || ["chequing", "savings"]).map((t) => wzAcctRow({ type: t }));
+      return '<div class="wz-accts" id="wzAccts">' + rows.join("") + '</div><button type="button" class="btn soft" data-act="wzAddAcct">' + icon("plus") + " Add another account</button>" +
+        '<p class="tiny muted">Have two savings accounts? Add each one. Debts like credit cards come on the next screen.</p>';
+    }
     if (f.type === "text") { const [a, b] = f.path.split("."); return '<label class="field">' + esc(f.label) + '<input name="' + f.path + '" value="' + esc(state[a][b] || "") + '" placeholder="' + esc(f.placeholder || "") + '" autocomplete="off"></label>'; }
     if (f.type === "money") { const v = wzMoneyValue(f.path); return '<label class="field">' + esc(f.label) + moneyInput('name="' + f.path + '" min="0" placeholder="' + esc(f.placeholder || "0") + '" value="' + (v || "") + '"') + "</label>"; }
     if (f.type === "choice") { const [a, b] = f.path.split("."); return '<div class="pick-grid">' + f.options.map(([v, label, emo]) => '<label class="pick"><input type="radio" name="' + f.path + '" value="' + v + '"' + (state[a][b] === v ? " checked" : "") + '><span class="pick-emoji">' + emo + "</span><span>" + esc(label) + "</span></label>").join("") + "</div>"; }
@@ -1161,6 +1192,17 @@
         const chosen = fd.getAll("sub");
         for (const [name, price, ic] of f.options) if (chosen.includes(name) && !state.subs.some((x) => x.name.toLowerCase() === name.toLowerCase())) state.subs.push({ id: uid(), name, amount: price, cycle: "monthly", next: toISO(addMonths(today(), 1)), icon: ic, status: "keep", reviewed: todayISO() });
       }
+      if (f.type === "accounts") {
+        const ids = fd.getAll("acctId"), types = fd.getAll("acctType"), names = fd.getAll("acctName"), amts = fd.getAll("acctAmt");
+        types.forEach((type, i) => {
+          const raw = amts[i]; if (raw === null || raw === undefined || String(raw).trim() === "") return;
+          const name = String(names[i] || "").trim() || acctType(type).name, bal = Math.max(0, num(raw));
+          const existing = ids[i] && state.accounts.find((a) => a.id === ids[i]);
+          if (existing) Object.assign(existing, { type, name, balance: bal, updated: todayISO() });
+          else state.accounts.push({ id: uid(), name, type, balance: bal, updated: todayISO() });
+        });
+        snapshotNet();
+      }
       if (f.type === "goal") {
         const ti = fd.get("goalTpl"), target = num(fd.get("goalTarget"));
         if (ti !== null && target > 0) { const t = C.goalTemplates[+ti]; state.goals.push({ id: uid(), name: t.name, icon: t.icon, theme: t.theme, target, saved: 0, date: toISO(addMonths(today(), 12)), account: t.account || "TFSA", photo: null, history: [] }); }
@@ -1176,7 +1218,8 @@
     return st.fields.some((f) =>
       f.type === "text" || f.type === "money" ? String(fd.get(f.path) || "").trim() !== "" :
       f.type === "choice" ? !!fd.get(f.path) : f.type === "subs" ? fd.getAll("sub").length > 0 :
-      f.type === "goal" ? fd.get("goalTpl") !== null && num(fd.get("goalTarget")) > 0 : false);
+      f.type === "goal" ? fd.get("goalTpl") !== null && num(fd.get("goalTarget")) > 0 :
+      f.type === "accounts" ? fd.getAll("acctAmt").some((v) => String(v).trim() !== "") : false);
   }
   function wzAdvance(apply) {
     const steps = C.setup.steps, i = state.ui.setupStep || 0, st = steps[i];
@@ -1919,7 +1962,10 @@
       return { w: w + 1, from, to, n, done, started, current: day >= from && day <= to, got: done ? FP.weeklyCoins || 5 : 0 };
     });
     const coins = Math.min(100, chores.reduce((a, x) => a + x.got, 0) + weeks.reduce((a, x) => a + x.got, 0));
-    const expected = Math.round((100 * day) / days), behind = expected - coins;
+    // someone who joined partway through the month is only expected to keep pace from the day they started
+    const sinceISO = (state.feed && state.feed.since) || todayISO(); // no start date yet means they just joined
+    const since = sinceISO.slice(0, 7) === ym ? +sinceISO.slice(8, 10) : sinceISO.slice(0, 7) > ym ? 99 : 1;
+    const expected = day < since ? 0 : Math.round((100 * (day - since + 1)) / (days - since + 1)), behind = expected - coins;
     const S = (id) => (FP.stages || []).find((x) => x.id === id) || { id, pose: "happy", emoji: "🐷", name: id, say: "" };
     const stage = coins >= 100 ? S("stuffed") : behind <= 0 ? S("happy") : behind <= 20 ? S("content") : behind <= 40 ? S("peckish") : S("hungry");
     return { ym, day, days, coins, expected, behind, stage, chores, weeks };
@@ -1927,6 +1973,7 @@
   function evalFeed() {
     if (!feedOn() || state.isExample) return;
     const f = feedBox(), cur = thisMonth();
+    if (!f.since) f.since = todayISO();
     // a new month: remember how last month went, then Penny's belly starts fresh
     if (f.lastYm && f.lastYm !== cur && f.history[f.lastYm] === undefined) {
       const lastYm = f.lastYm, last = feedStatus(lastYm); f.history[lastYm] = last.coins;
@@ -2060,9 +2107,10 @@
       return '<div class="page">' + exampleNote() +
         head("Budgets", "Give every dollar a job. Change any amount and it saves right away.", '<button class="btn" data-act="editCat">' + icon("plus") + " New category</button>") +
         '<div class="grid g2">' +
+        (b.need + b.want + b.save <= 0 && !state.isExample ? askCard("coin", "Penny needs your numbers", "Type how much you plan to spend each month in the boxes below. Start with the big ones like rent and groceries. Guesses are perfect, you can change them anytime.") :
         '<div class="card"><div class="card-head"><h2>' + icon("calculator") + " This month</h2>" + monthNav() + "</div>" +
         '<dl class="lines"><dt>Planned for needs + wants</dt><dd>' + money(b.need + b.want) + "</dd><dt>Spent so far</dt><dd>" + money(m.spent) + "</dd><dt>Planned savings</dt><dd>" + money(b.save) + "</dd>" +
-        '<dt class="tot">' + (b.need + b.want - m.spent >= 0 ? "Left to spend" : "Over budget by") + '</dt><dd class="tot ' + (b.need + b.want - m.spent >= 0 ? "good" : "bad") + '">' + money(Math.abs(b.need + b.want - m.spent)) + "</dd></dl></div>" +
+        '<dt class="tot">' + (b.need + b.want - m.spent >= 0 ? "Left to spend" : "Over budget by") + '</dt><dd class="tot ' + (b.need + b.want - m.spent >= 0 ? "good" : "bad") + '">' + money(Math.abs(b.need + b.want - m.spent)) + "</dd></dl></div>") +
         '<div class="card"><div class="card-head"><h2>' + icon("percent") + ' The 50/30/20 check</h2></div>' +
         (take > 0 ? '<p class="small muted" style="margin-bottom:12px">Based on take-home pay of about <b>' + money(take) + "</b> a month" + (state.tax.income > 0 ? " (from your Taxes page)" : "") + ".</p><div class=\"stack\">" +
           rule.map(([g, name, share, col]) => { const target = take * share, have = b[g]; return '<div><div class="row between small" style="margin-bottom:5px"><span><b style="color:' + col + '">' + name + '</b> <span class="muted">aim for ' + share * 100 + '%</span></span><span class="num">' + money(have) + ' <span class="muted">/ ' + money(target) + "</span></span></div>" + bar(have / (target || 1), g === "save") + "</div>"; }).join("") +
@@ -2073,9 +2121,9 @@
           return '<div><div class="row between" style="margin:6px 0 10px"><div><h2>' + name + '</h2><p class="small muted">' + sub + '</p></div><span class="pill ' + g + '">' + money(b[g]) + " / month</span></div>" +
             '<div class="grid g3">' + cats.map((c) => {
               const sp = m.byCat[c.id] || 0, p = c.budget ? sp / c.budget : sp ? 1.01 : 0, left = c.budget - sp;
-              return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div></div>" +
+              return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : !c.budget ? (sp ? "Spent " + money(sp) + ", no budget yet" : "No budget yet") : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div></div>" +
                 '<button class="iconbtn" data-act="editCat" data-id="' + c.id + '" title="Edit category">' + icon("pencil") + "</button></div>" + bar(p, g === "save") +
-                '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || 0) + '" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div></div>';
+                '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || "") + '" placeholder="0" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div></div>';
             }).join("") + "</div></div>";
         }).join("") +
         '<div class="card"><div class="card-head"><h2>💡 Tips for you</h2>' + (pennyOn() ? mascot(64, "P", "thinking") : "") + '</div><div class="tip-list">' + smartTips().map(([cls, ic, html]) => '<div class="callout ' + cls + '">' + icon(ic) + "<div>" + html + "</div></div>").join("") + "</div></div>" +
@@ -2244,8 +2292,8 @@
         '<div class="grid g2" style="align-items:start"><div class="card stack"><h2>' + icon("calculator") + " Your plan</h2>" +
         '<div class="seg" role="group" aria-label="Account">' + ["RRSP", "TFSA"].map((a) => '<button data-act="retireAcct" data-v="' + a + '" class="' + (R.account === a ? "on" : "") + '">' + a + "</button>").join("") + "</div>" +
         '<div class="fgrid">' +
-        field("Your age now", '<input type="number" min="15" max="80" data-flag="retire" ' + bind("retire.age") + ">") +
-        field("Retire at", '<input type="number" min="40" max="80" data-flag="retire" ' + bind("retire.retireAge") + ">") +
+        field("Your age now", '<input type="number" min="15" max="80" data-flag="retire" ' + bind("retire.age", "e.g. 30") + ">") +
+        field("Retire at", '<input type="number" min="40" max="80" data-flag="retire" ' + bind("retire.retireAge", "e.g. 65") + ">") +
         field("Already saved", moneyInput('data-flag="retire" ' + bind("retire.balance"))) +
         field("One-time deposit now", moneyInput('data-flag="retire" ' + bind("retire.lump")), "Try: what if I put $5,000 in today?") +
         field("Add every month", moneyInput('data-flag="retire" ' + bind("retire.monthly"))) +
@@ -2262,7 +2310,12 @@
     after() { this.update(); },
     update() {
       const el = $("#results"); if (!el) return;
-      const R = state.retire, p = project(R), isR = R.account === "RRSP", RC = C.retirement;
+      const R = state.retire;
+      if (!(num(R.age) > 0 && num(R.retireAge) > num(R.age))) {
+        el.innerHTML = askCard("retire", "Tell Penny about your plan", "Type <b>your age now</b> and <b>the age you'd like to retire</b>. Then add what you've already saved and what you could put in each month, and Penny shows how it grows.");
+        return;
+      }
+      const p = project(R), isR = R.account === "RRSP", RC = C.retirement;
       const tax = isR ? RC.retirementTaxRate / 100 : 0;
       const fromSavings = p.real * RC.withdrawRate / 100 / 12 * (1 - tax);
       const gov = R.includeGov ? num(R.cpp) + (num(R.retireAge) >= 65 ? RC.oasMonthly : 0) : 0;
@@ -2310,7 +2363,12 @@
     after() { this.update(); },
     update() {
       const el = $("#results"); if (!el) return;
-      const H = state.house, r = houseCalc(H), L = C.limits;
+      const H = state.house;
+      if (!(num(H.price) > 0)) {
+        el.innerHTML = askCard("home", "What kind of home are you dreaming of?", "Type a <b>price</b>, or tap Condo, Townhouse, Semi or Detached for a rough Toronto price. Then add what you've saved and what you save each month, and Penny works out the cash you need and when you'll get there.");
+        return;
+      }
+      const r = houseCalc(H), L = C.limits;
       const when = r.months === 0 ? "You have enough right now!" : r.months === Infinity ? "Add a monthly savings amount to see when." : "About <b>" + (r.months >= 12 ? (r.months / 12).toFixed(1) + " years" : r.months + " months") + "</b>, around " + addMonths(today(), r.months).toLocaleDateString(C.locale, { month: "long", year: "numeric" }) + ".";
       el.innerHTML =
         '<div class="card"><div class="label">Cash you need on closing day</div><div class="big-number">' + money(r.cash) + "</div>" +
@@ -2575,6 +2633,8 @@
      Button actions
      ================================================================== */
   const ACT = {
+    wzAddAcct() { const box = $("#wzAccts"); if (!box) return; box.insertAdjacentHTML("beforeend", wzAcctRow({ type: "savings" })); const last = box.lastElementChild; if (last) { const n = last.querySelector('input[name="acctAmt"]'); if (n) n.focus(); } const f = $("#wzForm"); if (f) f.dataset.touched = "1"; },
+    wzDelAcct(el) { const row = el.closest(".wz-acct"); const box = $("#wzAccts"); if (row && box && box.children.length > 1) row.parentNode.removeChild(row); else if (row) row.querySelectorAll("input:not([type=hidden])").forEach((i) => { i.value = ""; }); },
     openFeed() { feedModal(); },
     feedGo(el) { const c = FP.chores.find((x) => x.id === el.dataset.id); if (c) goTo(c.go, c.how); },
     feedTick(el) { const f = feedBox(), ym = thisMonth(), t = f.ticks[ym] = f.ticks[ym] || {}; const id = el.dataset.id; if (t[id]) delete t[id]; else t[id] = todayISO(); commit(); feedModal(); },

@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.4",
+  version: "3.5",
   whatsNew: [
+    "✍️ New profiles start empty: no made-up budgets, ages or home prices. Penny asks you for each number",
+    "🏦 Setup now lets you add all your accounts, like chequing and more than one savings account",
     "🧹 Cleaned out leftover example data (like the Japan trip) from new accounts",
     "🪙 Feed Penny! Do your monthly money chores to fill her coin belly. She gets happier as you go, and starts fresh every month",
     "🔐 Your synced data is now locked with your password. Nobody else can read it, not even the people who run Penny Pal",
@@ -237,8 +239,8 @@ window.CONFIG = {
         fields: [{ type: "subs", options: [["Netflix", 18.99, "film", "🎬"], ["Spotify", 11.99, "music", "🎧"], ["Crave", 22.99, "tv", "📺"], ["Disney+", 14.99, "film", "🏰"], ["Amazon Prime", 9.99, "shopping-bag", "📦"], ["YouTube Premium", 13.99, "tv", "▶️"], ["iCloud or Google storage", 3.99, "laptop", "☁️"], ["Gym", 50, "dumbbell", "🏋️"]] }] },
       { id: "debts", pose: "comfort", emoji: "💳", title: "Do you owe anything right now?", sub: "No judgment here, lots of people do. Leave it blank if not. This is just so we can help.",
         fields: [{ type: "money", path: "acct.cc", label: "💳 Credit cards" }, { type: "money", path: "acct.osap", label: "🎓 OSAP or student loans" }, { type: "money", path: "acct.carloan", label: "🚗 Car loan" }, { type: "money", path: "acct.loc", label: "🏦 Line of credit" }] },
-      { id: "savings", pose: "coin", emoji: "🐷", title: "What do you have saved so far?", sub: "Every dollar counts, even $0 is a fine place to start!",
-        fields: [{ type: "money", path: "acct.savings", label: "🐷 Savings account" }, { type: "money", path: "acct.tfsa", label: "🌱 TFSA" }, { type: "money", path: "acct.rrsp", label: "🌅 RRSP" }, { type: "money", path: "acct.fhsa", label: "🔑 FHSA" }] },
+      { id: "savings", pose: "coin", emoji: "🐷", title: "What's in your accounts right now?", sub: "Your chequing (everyday money), savings or high-interest savings, TFSA, RRSP and so on. Add as many as you have. Every dollar counts, even $0!",
+        fields: [{ type: "accounts", starters: ["chequing", "savings"] }] },
       { id: "goal", pose: "jar", emoji: "🎯", title: "Last one! Pick your first goal", sub: "Something exciting to save for. You can add more later.",
         fields: [{ type: "goal" }] }
     ]
