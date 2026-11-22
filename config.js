@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.0",
+  version: "3.1",
   whatsNew: [
+    "🔐 New here? Penny helps you make an account first, so your stuff follows you to every device",
+    "👀 \"Just look around\" is now view only, so you can explore without changing anything",
     "☁️ Sync! Sign in on your phone and laptop and your data follows you (My Stash)",
     "🐷 Penny is the big star on Home now",
     "🐷 Bigger Penny on every page, and she moves to match her picture. Tap her to say hi!",

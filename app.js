@@ -800,7 +800,7 @@
   const field = (label, inner, hint) => '<label class="field">' + label + inner + (hint ? '<span class="hint">' + hint + "</span>" : "") + "</label>";
   const bind = (path) => { const [a, b] = path.split("."); const v = state[a][b]; return 'data-bind="' + path + '" value="' + esc(v) + '"'; };
   const monthNav = () => '<div class="row" style="gap:4px"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Previous month">' + icon("chevron-left") + '</button><b style="min-width:138px;text-align:center">' + monthLabel(state.ui.month) + '</b><button class="iconbtn" data-act="month" data-d="1" aria-label="Next month">' + icon("chevron-right") + "</button></div>";
-  const exampleNote = () => state.isExample ? '<div class="callout gold example-note"><div class="example-text">' + icon("info") + '<span>You\'re looking at <b>example data</b>. Ready to make it yours? Setup takes about 3 minutes.</span></div><div class="example-btns"><button class="btn gold sm" data-act="startSetup">Set up my profile</button><button class="btn ghost sm" data-act="clearExample">Just clear it</button></div></div>' : "";
+  const exampleNote = () => state.isExample ? '<div class="callout gold example-note"><div class="example-text">' + icon("info") + '<span>You\'re looking at <b>example data</b> 👀 It\'s view only. Ready to make it yours?</span></div><div class="example-btns"><button class="btn gold sm" data-act="startSetup">Make it mine ✨</button></div></div>' : "";
   const PAGE_EMOJI = { path: "🗺️", spending: "🧾", budgets: "👛", bills: "📺", goals: "🎯", networth: "⚖️", taxes: "🍁", retirement: "🌅", house: "🔑", learn: "📚", rewards: "🏆", reminders: "🔔", mydata: "💾" };
   const PAGE_POSE = { path: "explorer", spending: "thinking", budgets: "coin", bills: "surprised", goals: "jar", networth: "growth", taxes: "taxes", retirement: "retire", house: "home", learn: "reading", rewards: "trophy", reminders: "alarm", mydata: "calm" };
   function showPageIntro(id) {
@@ -1102,8 +1102,9 @@
       el.innerHTML = '<div class="wz-inner wz-center">' + mascot(170, null, "wave") + "<h1>Welcome to " + esc(C.appName) + "! 🌱</h1>" +
         '<div class="bubble-say bubble-big">Hi! I\'m ' + esc(C.mascotName || "Penny") + " 🐷, your money pal. I'm here to help you save, one tiny step at a time. No judgment, just lots of cheering!</div>" +
         '<p class="wz-sub">A calm, friendly home for your money. Let\'s set things up together.</p>' +
-        '<div class="stack" style="width:100%;max-width:360px"><button class="btn big-btn" data-act="wzStart">Let\'s set it up ✨ <span class="tiny">(about 3 minutes)</span></button><button class="btn ghost" data-act="wzExample">Just look around first 👀</button></div>' +
-        '<p class="tiny muted">🔒 Everything stays on this device. Nothing is shared.</p></div>';
+        '<div class="stack" style="width:100%;max-width:360px"><button class="btn big-btn" data-act="wzStart">Let\'s set it up ✨ <span class="tiny">(about 3 minutes)</span></button><button class="btn ghost" data-act="wzExample">Just look around first 👀</button>' +
+        (syncReady() && !signedIn() ? '<button type="button" class="linklike small" data-act="wzSignIn">Already have an account? Sign in</button>' : "") + "</div>" +
+        '<p class="tiny muted">🔒 ' + (syncReady() ? "Only you can see your money stuff." : "Everything stays on this device. Nothing is shared.") + "</p></div>";
       return;
     }
     if (i >= steps.length) return renderWizardDone();
@@ -1709,15 +1710,76 @@
       '<button class="pick" data-act="syncKeepDevice"><span class="pick-emoji">💻</span><b>This device</b><span class="tiny muted">' + n(local.transactions) + " transactions, " + n(local.goals) + " goals</span></button></div>" +
       '<p class="tiny muted">Not sure? Pick the one with more of your real stuff. You can download a backup of this device first in My Stash.</p></div>');
   }
+  async function authCall(kind, email, password) {
+    return kind === "signup"
+      ? sb("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }) }, false)
+      : sb("/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) }, false);
+  }
+  function authError(e) {
+    const m = String((e && e.message) || "") + " " + String((e && e.code) || "");
+    return /invalid login|invalid_credentials|invalid grant|invalid_grant/i.test(m) ? "That email and password don't match. Try again, or create an account first." :
+      /already registered|already been registered|user_already_exists/i.test(m) ? "There's already an account with that email. Tap \"I already have an account\" to sign in." :
+      /not confirmed|email_not_confirmed/i.test(m) ? "Please confirm your email first (check your inbox), then sign in." :
+      (e && (e.message === "timeout" || e instanceof TypeError)) ? "Couldn't reach Penny's sync server. Check your internet and try again." : "Something went wrong: " + m.trim();
+  }
+  function authCheck(email, password) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return "That email doesn't look right.";
+    if (String(password || "").length < 8) return "Use a password with at least 8 characters.";
+    return "";
+  }
+
+  /* Account screen in the welcome flow: create an account (or sign in) before setup */
+  let wzAuthMode = "signup", wzAuthMsg = "", wzAuthBusy = false, wzAuthEmail = "";
+  function renderAccountStep() {
+    const el = wizardEl(), up = wzAuthMode === "signup";
+    document.body.classList.add("wz-open");
+    el.innerHTML = '<div class="wz-inner wz-center">' + mascot(150, null, up ? "proud" : "wave") +
+      "<h1>" + (up ? "First, let's make your account" : "Welcome back! 👋") + "</h1>" +
+      '<p class="wz-sub">' + (up ? "So your stuff stays safe and shows up on your phone and laptop. Only you can see it." : "Sign in and Penny brings all your stuff over to this device.") + "</p>" +
+      '<form data-form="wzAuth" class="stack wz-auth" autocomplete="on" novalidate>' +
+      '<div class="wz-auth-msg">' + (wzAuthMsg ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(wzAuthMsg) + "</div></div>" : "") + "</div>" +
+      field("Email", '<input type="email" name="email" autocomplete="email" required value="' + esc(wzAuthEmail || sync.email || "") + '" placeholder="you@example.com">') +
+      field("Password", '<input type="password" name="password" autocomplete="' + (up ? "new-password" : "current-password") + '" required placeholder="At least 8 characters">') +
+      '<button class="btn big-btn"' + (wzAuthBusy ? " disabled" : "") + ">" + (wzAuthBusy ? "One sec..." : up ? "Create my account ✨" : "Sign in") + "</button>" +
+      '<button type="button" class="btn ghost" data-act="wzAuthToggle">' + (up ? "I already have an account" : "I'm new here, create an account") + "</button></form>" +
+      '<button type="button" class="linklike tiny muted" data-act="wzAuthSkip">Skip for now (your data stays on this device only)</button></div>';
+    const first = el.querySelector(wzAuthEmail || sync.email ? "input[name=password]" : "input[name=email]"); if (first) setTimeout(() => first.focus(), 50);
+  }
+  function wzAuthShow(msg, busy) {
+    // update the message and button in place, so nothing you typed gets wiped
+    wzAuthMsg = msg; wzAuthBusy = !!busy;
+    const box = $("#wizard .wz-auth-msg"), btn = $("#wizard .wz-auth .big-btn");
+    if (box) box.innerHTML = msg ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(msg) + "</div></div>" : "";
+    if (btn) { btn.disabled = !!busy; btn.textContent = busy ? "One sec..." : wzAuthMode === "signup" ? "Create my account ✨" : "Sign in"; }
+  }
+  async function wzAuth(email, password) {
+    email = String(email || "").trim().toLowerCase(); wzAuthEmail = email;
+    const bad = authCheck(email, password); if (bad) return wzAuthShow(bad);
+    wzAuthShow("", true);
+    const kind = wzAuthMode;
+    try {
+      const b = await authCall(kind, email, password);
+      wzAuthBusy = false;
+      if (!b || !b.access_token) { sync.email = email; saveSync(); wzAuthMode = "signin"; wzAuthMsg = "Almost there! Check your email for a confirmation link, then sign in here."; return renderAccountStep(); }
+      if (state.isExample) state.isExample = false; // leaving look-around mode
+      takeSession(b); sync.dirty = false; sync.seen = null; sync.lastSync = Date.now(); saveSync(); syncState = "ok";
+      const row = await sbRow().catch(() => null);
+      if (row && row.data) { // returning person on a new device: bring their stuff over and skip setup
+        closeWizard(); applyRemote(row, true); render(); toast("☁️ Welcome back" + (state.profile.name ? ", " + esc(state.profile.name) : "") + "! All your stuff is here");
+        return;
+      }
+      if (kind === "signup") award(25, "Account created", true);
+      wzMsg = kind === "signup" ? "Account made! 🎉 Now let's set up your money home." : "Signed in! Let's set up your money home.";
+      ACT.startSetup(true);
+    } catch (e) { wzAuthShow(authError(e), false); }
+  }
+
   async function syncAuth(kind, email, password) {
     email = String(email || "").trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { syncNote = "That email doesn't look right."; return render(); }
-    if (String(password || "").length < 8) { syncNote = "Use a password with at least 8 characters."; return render(); }
+    syncNote = authCheck(email, password); if (syncNote) return render();
     syncState = "syncing"; syncNote = ""; render();
     try {
-      const b = kind === "signup"
-        ? await sb("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }) }, false)
-        : await sb("/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) }, false);
+      const b = await authCall(kind, email, password);
       if (!b || !b.access_token) { syncState = "idle"; sync.email = email; saveSync(); syncNote = "Almost there! Check your email for a confirmation link, then come back and sign in."; return render(); }
       takeSession(b); sync.dirty = false; sync.seen = null;
       await syncFirstLink();
@@ -1725,12 +1787,7 @@
       if (kind === "signup") { award(25, "Sync turned on"); celebrate("track", { emoji: "☁️", title: "Sync is on!", sub: "Sign in with the same email on your other devices and everything follows you." }); }
       else toast(icon("check") + " Signed in. Sync is on");
     } catch (e) {
-      syncState = "idle";
-      const m = String(e.message || "");
-      syncNote = /invalid login|invalid_credentials|invalid grant/i.test(m + e.code) ? "That email and password don't match. Try again, or create an account first." :
-        /already registered|already been registered|user_already_exists/i.test(m + e.code) ? "There's already an account with that email. Press Sign in instead." :
-        /not confirmed|email_not_confirmed/i.test(m + e.code) ? "Please confirm your email first (check your inbox), then sign in." :
-        e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Check your internet and try again." : "Something went wrong: " + m;
+      syncState = "idle"; syncNote = authError(e).replace('Tap "I already have an account" to sign in', "Press Sign in instead");
     }
     render();
   }
@@ -2339,6 +2396,8 @@
      Button actions
      ================================================================== */
   const ACT = {
+    lookMine() { closeModal(); ACT.startSetup(); },
+    lookKeep() { closeModal(); },
     syncNow() { syncNow(true); },
     syncSignOut() { syncSignOut(false); toast("Signed out. Your data is still on this device."); },
     syncKeepAccount() { const row = window.__syncChoice; window.__syncChoice = null; closeModal(); if (row) applyRemote(row, true); toast("☁️ Using your account's data"); },
@@ -2351,12 +2410,16 @@
         '<textarea name="text" rows="10" placeholder="Paste the email text here" required></textarea><div class="row"><button class="btn">' + icon("search") + ' Read it</button><button type="button" class="btn ghost" data-act="scanReceipt">Back</button></div></form>');
     },
     startCheckin() { ciIndex = 0; ciQuestion(); },
-    startSetup() {
+    startSetup(skipAccount) {
+      if (skipAccount !== true && syncReady() && !signedIn() && !state.ui.skippedAccount) { wzAuthMode = "signup"; wzAuthMsg = ""; return renderAccountStep(); }
       if (state.isExample) { const keepUi = state.ui, keepProfile = state.profile; state = blankState(); state.ui = Object.assign(keepUi, { setupDone: false, setupStep: 0 }); state.profile = keepProfile; }
-      state.ui.setupStep = 0; wzMsg = ""; save(); render(); renderWizard();
+      state.ui.setupStep = 0; if (skipAccount !== true) wzMsg = ""; save(); render(); renderWizard();
     },
     openWizard() { if ((state.ui.setupStep || 0) >= C.setup.steps.length) state.ui.setupStep = 0; wzMsg = ""; renderWizard(); },
     wzStart() { ACT.startSetup(); },
+    wzSignIn() { wzAuthMode = "signin"; wzAuthMsg = ""; renderAccountStep(); },
+    wzAuthToggle() { const em = $("#wizard .wz-auth input[name=email]"); if (em) wzAuthEmail = em.value.trim(); wzAuthMode = wzAuthMode === "signup" ? "signin" : "signup"; wzAuthMsg = ""; renderAccountStep(); },
+    wzAuthSkip() { state.ui.skippedAccount = true; wzMsg = "No problem! You can turn on sync anytime in My Stash."; ACT.startSetup(true); },
     wzExample() { state = exampleState(); state.ui.seenVersion = C.version; checkIn(); evaluate(); closeWizard(); save(); render(); toast("👀 Have a look around! Press \"Set up my profile\" whenever you're ready."); },
     wzBack() { state.ui.setupStep = Math.max(0, (state.ui.setupStep || 0) - 1); wzMsg = ""; save(); renderWizard(); },
     wzSkip() { wzAdvance(false); },
@@ -2489,6 +2552,7 @@
     return { rows, dupes: all.length - rows.length };
   }
   const FORM = {
+    wzAuth(f, d) { wzAuth(d.email, d.password); },
     syncSignIn(f, d, e) { const kind = (e && e.submitter && e.submitter.value) || "signin"; syncAuth(kind, d.email, d.password); },
     receiptText(f, d) { handleReceiptText(d.text || ""); },
     saveReceipt(f, d) {
@@ -2587,7 +2651,7 @@
     },
     calmMode(el) { state.ui.calm = el.checked; applyTheme(); save(); toast(el.checked ? "🍃 Calm mode on. Everything stays still." : "Animations are back ✨"); },
     celebrate(el) { state.ui.celebrate = el.checked; save(); if (el.checked) celebrate("save", { title: "Celebrations on!", sub: "Get ready for confetti 🎉" }); },
-    txSearch(el) { state.ui.q = el.value; render(); const s = $('[data-change="txSearch"]'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } },
+    txSearch(el) { if (state.ui.q === el.value) return; state.ui.q = el.value; render(); const s = $('[data-change="txSearch"]'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } },
     txCat(el) { state.ui.cat = el.value; render(); },
     txCatInline(el) { const t = state.transactions.find((x) => x.id === el.dataset.id); t.cat = el.value; t.recatOn = todayISO(); commit("Moved to " + catById(el.value).name); },
     txKind(el) { const pick = $("#catPick"); if (pick) pick.innerHTML = catPick(el.value, null); },
@@ -2632,7 +2696,42 @@
      Wiring
      ================================================================== */
   function formData(f) { const d = {}; new FormData(f).forEach((v, k) => (d[k] = v)); return d; }
+  /* "Just look around" mode: example data you can browse but not change */
+  const LOOK_OK_ACTS = new Set(["month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
+    "wzStart", "wzSignIn", "wzAuthToggle", "wzAuthSkip", "wzExample", "wzHome", "wzLater", "wzBack", "wzSkip", "wzCheckin"]);
+  const LOOK_OK_CHANGES = new Set(["txSearch", "txCat", "calmMode", "celebrate"]);
+  function lookOnlyBlocks(el, kind) {
+    if (!state || !state.isExample || !el || !el.closest) return false;
+    if (el.closest("#wizard, .sync-card, .look-nudge")) return false;
+    if (kind === "act") { const a = el.closest("[data-act]"); return !!a && !LOOK_OK_ACTS.has(a.dataset.act); }
+    if (kind === "form") { const f = el.closest("form[data-form]"); return !!f && !["syncSignIn", "wzAuth"].includes(f.dataset.form); }
+    const field = el.closest("input, select, textarea"); if (!field || !field.closest("#view, .overlay")) return false;
+    const ch = field.dataset && field.dataset.change; if (ch && LOOK_OK_CHANGES.has(ch)) return false;
+    return true;
+  }
+  let lookNudgeAt = 0;
+  function lookNudge() {
+    if (Date.now() - lookNudgeAt < 300 || $(".look-nudge")) return; lookNudgeAt = Date.now();
+    openModal('<div class="ci look-nudge">' + (pennyOn() ? mascot(130, "P", "surprised") : '<div class="ci-emoji">👀</div>') +
+      "<h2>This is just example data</h2><p>You can look around all you like! To add your own stuff, let's make your account first. It takes a minute.</p>" +
+      '<div class="row" style="justify-content:center"><button class="btn" data-act="lookMine">Make it mine ✨</button><button class="btn ghost" data-act="lookKeep">Keep looking</button></div></div>');
+  }
+  function guardLookAround() {
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); lookNudge(); };
+    window.addEventListener("click", (e) => {
+      if (lookOnlyBlocks(e.target, "act")) return stop(e);
+      const t = e.target; if (t && t.matches && t.matches("input[type=checkbox], input[type=radio], input[type=file], label, label *") && lookOnlyBlocks(t.closest("label") ? (t.closest("label").querySelector("input") || t) : t, "field")) return stop(e);
+    }, true);
+    window.addEventListener("submit", (e) => { if (lookOnlyBlocks(e.target, "form")) stop(e); }, true);
+    // stop dropdowns and text boxes before they open
+    window.addEventListener("pointerdown", (e) => { const t = e.target; if (t && t.closest && t.closest("select, input:not([type=checkbox]):not([type=radio]), textarea") && lookOnlyBlocks(t, "field")) { e.preventDefault(); setTimeout(lookNudge, 0); } }, true);
+    window.addEventListener("focusin", (e) => { const t = e.target; if (lookOnlyBlocks(t, "field") && !(t.type === "checkbox" || t.type === "radio")) setTimeout(() => { if (document.activeElement === t) t.blur(); lookNudge(); }, 0); }, true);
+    window.addEventListener("input", (e) => { if (lookOnlyBlocks(e.target, "field")) e.stopImmediatePropagation(); }, true);
+    window.addEventListener("change", (e) => { if (lookOnlyBlocks(e.target, "field")) { e.stopImmediatePropagation(); setTimeout(render, 0); } }, true);
+  }
+
   function wire() {
+    guardLookAround();
     document.addEventListener("click", (e) => {
       const a = e.target.closest("[data-act]"); if (!a || a.disabled) return;
       const fn = ACT[a.dataset.act]; if (fn) { e.preventDefault(); fn(a, e); }

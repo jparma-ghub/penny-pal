@@ -741,3 +741,10 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
     linear-gradient(180deg, #6f6f98, #8389a8 52%) !important; }
 }
 .modal button.pick { font: inherit; color: inherit; cursor: pointer; }
+
+/* Account step before setup */
+.linklike { all: unset; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; color: var(--accent); padding: 4px 6px; border-radius: 6px; text-align: center; }
+.linklike.muted { color: var(--muted); }
+.linklike:focus-visible { outline: 2px solid var(--accent); }
+.wz-auth { width: 100%; max-width: 360px; text-align: left; }
+.wz-auth .big-btn { width: 100%; }
