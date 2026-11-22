@@ -790,3 +790,11 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
   .ci-card > div[style*="flex:1"] { flex: 1 1 200px !important; }
   .ci-card > .btn, .ci-card > .row { flex: 1 1 100%; justify-content: center; }
 }
+
+/* Privacy */
+.privacy-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.privacy-item { display: flex; gap: 10px; align-items: flex-start; background: var(--surface-2); border-radius: 14px; padding: 12px; }
+.privacy-item .privacy-emoji { font-size: 1.4rem; line-height: 1; flex: none; }
+.privacy-item p { margin-top: 2px; }
+.privacy-note { text-align: left; max-width: 360px; width: 100%; }
+.privacy-card summary { cursor: pointer; font-weight: 600; }

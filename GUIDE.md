@@ -193,6 +193,14 @@ create policy "delete own" on public.penny_data for delete using (auth.uid() = u
 
 The anon key is safe to be public. The rules in step 2 are what keep everyone's data private.
 
+**Privacy and security**
+
+- Each person's data is locked (AES-256 encryption) with a key made from their own password, right on their device, before it's sent. Supabase only ever stores scrambled text. Not even you, as the owner of the Supabase project, can read your friends' money data.
+- The database rules from step 2 also stop anyone from reading or changing someone else's row, even scrambled.
+- The website has a strict security policy that only lets it load code from itself and three trusted libraries, and only talk to Supabase and the weather service.
+- Because only the password can unlock synced data, a forgotten password can't be reset. The copy on each device is still fine, and you can download a backup.
+- To keep your Supabase account safe: use a strong password for supabase.com, turn on two-factor login (Account, Security), and never share the service_role or secret key. In Authentication, Providers, Email you can also raise the minimum password length to 8.
+
 **How it behaves**
 
 - My Stash has a **Sync my phone and laptop** card. Create an account on one device, then sign in with the same email and password on the others.

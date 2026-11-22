@@ -1104,7 +1104,7 @@
         '<p class="wz-sub">A calm, friendly home for your money. Let\'s set things up together.</p>' +
         '<div class="stack" style="width:100%;max-width:360px"><button class="btn big-btn" data-act="wzStart">Let\'s set it up ✨ <span class="tiny">(about 3 minutes)</span></button><button class="btn ghost" data-act="wzExample">Just look around first 👀</button>' +
         (syncReady() && !signedIn() ? '<button type="button" class="linklike small" data-act="wzSignIn">Already have an account? Sign in</button>' : "") + "</div>" +
-        '<p class="tiny muted">🔒 ' + (syncReady() ? "Only you can see your money stuff." : "Everything stays on this device. Nothing is shared.") + "</p></div>";
+        '<p class="tiny muted">🔒 ' + (syncReady() ? "Your money stuff is private. It's locked with your password, so only you can read it." : "Everything stays on this device. Nothing is shared.") + "</p></div>";
       return;
     }
     if (i >= steps.length) return renderWizardDone();
@@ -1651,11 +1651,39 @@
     syncNote = expired ? "You were signed out. Sign in again to keep syncing." : "";
     if (pageId() === "mydata") render();
   }
-  const sbRow = async () => { const rows = await sb("/rest/v1/penny_data?select=data,updated_at&user_id=eq." + encodeURIComponent(sync.userId)); return rows && rows[0] ? rows[0] : null; };
+  /* Your data is locked (AES-256) with a key made from your password before it leaves the device.
+     The server only ever stores scrambled text. Nobody without your password can read it,
+     including whoever runs the Supabase project. */
+  const te = new TextEncoder(), td = new TextDecoder();
+  const b64 = (buf) => { const a = new Uint8Array(buf); let s = ""; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); };
+  const unb64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+  async function deriveKey(password, userId) {
+    const base = await crypto.subtle.importKey("raw", te.encode(password), "PBKDF2", false, ["deriveBits"]);
+    return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: te.encode("penny-pal:v1:" + userId), iterations: 310000, hash: "SHA-256" }, base, 256));
+  }
+  const aesKey = () => crypto.subtle.importKey("raw", unb64(sync.key), "AES-GCM", false, ["encrypt", "decrypt"]);
+  async function lockData(obj) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await aesKey(), te.encode(JSON.stringify(obj)));
+    return { locked: 1, iv: b64(iv), ct: b64(ct) };
+  }
+  async function unlockData(data) {
+    if (!data || !data.locked) return data; // saved before locking existed: it gets locked on the next save
+    try { return JSON.parse(td.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(data.iv) }, await aesKey(), unb64(data.ct)))); }
+    catch (e) { throw new Error("wrong_key"); }
+  }
+  async function setKey(password) { sync.key = await deriveKey(password, sync.userId); saveSync(); }
+  const sbRow = async () => {
+    const rows = await sb("/rest/v1/penny_data?select=data,updated_at&user_id=eq." + encodeURIComponent(sync.userId));
+    const row = rows && rows[0] ? rows[0] : null;
+    if (row) { row.wasLocked = !!(row.data && row.data.locked); row.data = await unlockData(row.data); }
+    return row;
+  };
   function shareable() { const copy = JSON.parse(JSON.stringify(state)); if (copy.ui) delete copy.ui.weather; return copy; }
   async function sbPush() {
     const data = shareable(), json = JSON.stringify(data), at = new Date().toISOString();
-    await sb("/rest/v1/penny_data?on_conflict=user_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: sync.userId, data, updated_at: at }) });
+    if (!sync.key) throw new Error("need_key");
+    await sb("/rest/v1/penny_data?on_conflict=user_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: sync.userId, data: await lockData(data), updated_at: at }) });
     sync.seen = at; sync.dirty = false; saveSync(); lastPushed = json;
   }
   function applyRemote(row, quiet) {
@@ -1676,23 +1704,27 @@
   }
   async function syncNow(manual) {
     if (!signedIn() || syncBusy) return;
+    if (!sync.key) { syncState = "needkey"; if (pageId() === "mydata") render(); return; }
     if (!navigator.onLine) { syncState = "offline"; if (manual) toast("You're offline. Penny will sync when you're back online."); return; }
     syncBusy = true; syncState = "syncing"; if (pageId() === "mydata" && manual) render();
     try {
       const row = await sbRow();
+      let pushed = false;
       if (row && row.updated_at !== sync.seen) {
         // someone else (your other device) saved since we last looked
         const theirs = Date.parse(row.updated_at) || 0;
         if (!sync.dirty || theirs > (sync.editedAt || 0)) applyRemote(row);
-        else await sbPush();
+        else { await sbPush(); pushed = true; }
       } else if (sync.dirty || !row) {
-        if (!state.isExample) await sbPush();
+        if (!state.isExample) { await sbPush(); pushed = true; }
       }
+      // data saved before locking existed gets locked right away
+      if (row && !row.wasLocked && !pushed && !state.isExample) await sbPush();
       syncState = "ok"; syncNote = ""; sync.lastSync = Date.now(); saveSync();
       if (manual) toast(icon("check") + " All synced");
     } catch (e) {
-      syncState = e.message === "signed_out" ? "idle" : "error";
-      syncNote = e.message === "signed_out" ? syncNote : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
+      syncState = e.message === "signed_out" ? "idle" : e.message === "wrong_key" || e.message === "need_key" ? "needkey" : "error";
+      syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
       if (manual) toast(esc(syncNote || "Couldn't sync right now"));
     } finally { syncBusy = false; if (pageId() === "mydata") render(); }
   }
@@ -1735,7 +1767,8 @@
     document.body.classList.add("wz-open");
     el.innerHTML = '<div class="wz-inner wz-center">' + mascot(150, null, up ? "proud" : "wave") +
       "<h1>" + (up ? "First, let's make your account" : "Welcome back! 👋") + "</h1>" +
-      '<p class="wz-sub">' + (up ? "So your stuff stays safe and shows up on your phone and laptop. Only you can see it." : "Sign in and Penny brings all your stuff over to this device.") + "</p>" +
+      '<p class="wz-sub">' + (up ? "So your stuff stays safe and shows up on your phone and laptop." : "Sign in and Penny brings all your stuff over to this device.") + "</p>" +
+      '<div class="callout small privacy-note">' + icon("lock") + "<div><b>Your data is private.</b> It's locked with your password before it leaves this device. Nobody else can read it, not even the people who run Penny Pal. We never sell it, share it or show you ads.</div></div>" +
       '<form data-form="wzAuth" class="stack wz-auth" autocomplete="on" novalidate>' +
       '<div class="wz-auth-msg">' + (wzAuthMsg ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(wzAuthMsg) + "</div></div>" : "") + "</div>" +
       field("Email", '<input type="email" name="email" autocomplete="email" required value="' + esc(wzAuthEmail || sync.email || "") + '" placeholder="you@example.com">') +
@@ -1762,7 +1795,7 @@
       wzAuthBusy = false;
       if (!b || !b.access_token) { sync.email = email; saveSync(); wzAuthMode = "signin"; wzAuthMsg = "Almost there! Check your email for a confirmation link, then sign in here."; return renderAccountStep(); }
       if (state.isExample) state.isExample = false; // leaving look-around mode
-      takeSession(b); sync.dirty = false; sync.seen = null; sync.lastSync = Date.now(); saveSync(); syncState = "ok";
+      takeSession(b); sync.dirty = false; sync.seen = null; sync.lastSync = Date.now(); await setKey(password); syncState = "ok";
       const row = await sbRow().catch(() => null);
       if (row && row.data) { // returning person on a new device: bring their stuff over and skip setup
         closeWizard(); applyRemote(row, true); render(); toast("☁️ Welcome back" + (state.profile.name ? ", " + esc(state.profile.name) : "") + "! All your stuff is here");
@@ -1781,7 +1814,7 @@
     try {
       const b = await authCall(kind, email, password);
       if (!b || !b.access_token) { syncState = "idle"; sync.email = email; saveSync(); syncNote = "Almost there! Check your email for a confirmation link, then come back and sign in."; return render(); }
-      takeSession(b); sync.dirty = false; sync.seen = null;
+      takeSession(b); sync.dirty = false; sync.seen = null; await setKey(password);
       await syncFirstLink();
       syncState = "ok"; sync.lastSync = Date.now(); saveSync();
       if (kind === "signup") { award(25, "Sync turned on"); celebrate("track", { emoji: "☁️", title: "Sync is on!", sub: "Sign in with the same email on your other devices and everything follows you." }); }
@@ -1796,17 +1829,36 @@
     const ago = (t) => { if (!t) return "not yet"; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago"; };
     let body;
     if (inFrame()) body = '<p class="small">Syncing between your phone and laptop works on the Penny Pal website' + (SC.website ? ': <a href="' + esc(SC.website) + '" target="_blank" rel="noopener">' + esc(SC.website.replace(/^https?:\/\//, "")) + "</a>" : "") + '. This preview inside Claude can\'t connect to it.</p>';
+    else if (signedIn() && syncState === "needkey") body = '<div class="callout gold">' + icon("lock") + '<div><b>One quick step:</b> enter your password once so Penny can lock your data before it syncs. After this, only your password can unlock it.</div></div>' +
+      (syncNote ? '<p class="small" style="color:var(--warn)">' + esc(syncNote) + "</p>" : "") +
+      '<form data-form="syncUnlock" class="stack">' + field("Password for " + esc(sync.email || "your account"), '<input type="password" name="password" autocomplete="current-password" required placeholder="Your Penny Pal password">') +
+      '<div class="row"><button class="btn">' + icon("lock") + ' Lock and sync</button><button type="button" class="btn ghost" data-act="syncSignOut">Sign out</button></div></form>';
     else if (signedIn()) body = '<div class="callout">' + icon("check") + '<div><b>Sync is on</b> for ' + esc(sync.email || "your account") + '.<br><span class="small muted">Last synced ' + ago(sync.lastSync) + (syncState === "syncing" ? " · syncing..." : "") + "</span></div></div>" +
       (syncNote ? '<p class="small" style="color:var(--warn)">' + esc(syncNote) + "</p>" : "") +
       '<p class="small muted">Sign in with this same email on your other phone or laptop and everything follows you. If two devices change things at the same time, the most recent change wins.</p>' +
       '<div class="row"><button class="btn" data-act="syncNow">' + icon("refresh-cw") + ' Sync now</button><button class="btn ghost" data-act="syncSignOut">Sign out</button></div>';
-    else body = '<p class="small">Use the same email and password on your phone and laptop, and Penny keeps them matched automatically. Only you can see your data.</p>' +
+    else body = '<p class="small">Use the same email and password on your phone and laptop, and Penny keeps them matched automatically. Your data is locked with your password before it leaves the device, so only you can read it.</p>' +
       (syncNote ? '<div class="callout gold small">' + icon("info") + "<div>" + esc(syncNote) + "</div></div>" : "") +
       '<form data-form="syncSignIn" class="stack" autocomplete="on">' + field("Email", '<input type="email" name="email" autocomplete="email" required value="' + esc(sync.email || "") + '" placeholder="you@example.com">') +
       field("Password", '<input type="password" name="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters">') +
       '<div class="row"><button class="btn" name="kind" value="signin"' + (syncState === "syncing" ? " disabled" : "") + ">Sign in</button><button class=\"btn ghost\" name=\"kind\" value=\"signup\"" + (syncState === "syncing" ? " disabled" : "") + '>Create account</button></div></form>' +
       '<p class="tiny muted">New here? Press Create account. Already made one on another device? Press Sign in.</p>';
     return '<div class="card stack sync-card"><h2>☁️ Sync my phone and laptop</h2>' + body + "</div>";
+  }
+  function privacyCard() {
+    const items = [
+      ["🙈", "Nobody else can see your money", "Not your friends, not other Penny Pal users, not the people who run the app."],
+      ["🔐", "Locked with your password", syncReady() ? "With sync on, your data is scrambled with a key made from your password before it leaves this device. The server only stores the scrambled version." : "Your data stays in this browser on this device."],
+      ["🚫", "No ads, no selling, no tracking", "Penny Pal never sells or shares your data and has no ads or trackers."],
+      ["🏦", "We never ask for your bank login", "You bring in transactions yourself with a bank file or a receipt. Penny never connects to your bank."],
+      ["📸", "Receipts stay with you", "Emails and PDF bills are read right on your device. Photos are too (inside Claude, Claude reads them after asking you)."]
+    ];
+    return '<div class="card stack privacy-card"><h2>' + icon("lock") + " Your privacy</h2>" +
+      '<div class="privacy-list">' + items.map(([e, t, d]) => '<div class="privacy-item"><span class="privacy-emoji">' + e + "</span><div><b>" + t + '</b><p class="small muted">' + d + "</p></div></div>").join("") + "</div>" +
+      '<details class="small"><summary>Good to know</summary><ul class="small muted" style="padding-left:1.1em;margin-top:6px">' +
+      "<li>Pick a password you don't use anywhere else. Only your password can unlock your synced data, so nobody can reset it for you. If you forget it, the copy on your devices is still fine, but you'd start a new account.</li>" +
+      "<li>Anyone who can open your unlocked phone or laptop can open Penny Pal, just like your photos or messages. Use a screen lock.</li>" +
+      "<li>Download a backup once in a while as an extra safety net.</li></ul></details></div>";
   }
   function startSync() {
     if (!syncReady()) return;
@@ -2217,7 +2269,7 @@
     render() {
       let size = 0; try { size = (localStorage.getItem(KEY) || "").length; } catch (e) { size = 0; }
       return '<div class="page">' + head("My data", "Everything stays in this browser. Nothing is sent anywhere, and nothing costs money.") +
-        syncCard() + '<div class="grid g2"><div class="card stack"><h2>' + icon("smile") + " You</h2>" + field("What should we call you?", '<input data-bind="profile.name" value="' + esc(state.profile.name) + '" placeholder="Your first name">') +
+        syncCard() + privacyCard() + '<div class="grid g2"><div class="card stack"><h2>' + icon("smile") + " You</h2>" + field("What should we call you?", '<input data-bind="profile.name" value="' + esc(state.profile.name) + '" placeholder="Your first name">') +
         '<label class="check"><input type="checkbox" data-change="calmMode"' + (state.ui.calm ? " checked" : "") + '> Calm mode: no moving animations, softer pop-ups 🍃</label>' +
         '<label class="check"><input type="checkbox" data-change="celebrate"' + (state.ui.celebrate !== false ? " checked" : "") + '> Celebrations: confetti and pop-ups when you save 🎉</label>' +
         "</div>" +
@@ -2552,6 +2604,11 @@
     return { rows, dupes: all.length - rows.length };
   }
   const FORM = {
+    async syncUnlock(f, d) {
+      const pw = String(d.password || ""); if (!pw) return;
+      try { takeSession(await authCall("signin", sync.email, pw)); await setKey(pw); syncNote = ""; syncState = "idle"; await syncNow(true); }
+      catch (e) { syncNote = authError(e); render(); }
+    },
     wzAuth(f, d) { wzAuth(d.email, d.password); },
     syncSignIn(f, d, e) { const kind = (e && e.submitter && e.submitter.value) || "signin"; syncAuth(kind, d.email, d.password); },
     receiptText(f, d) { handleReceiptText(d.text || ""); },

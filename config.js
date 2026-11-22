@@ -30,8 +30,10 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.1",
+  version: "3.2",
   whatsNew: [
+    "🔐 Your synced data is now locked with your password. Nobody else can read it, not even the people who run Penny Pal",
+    "🙈 A new Your privacy card in My Stash explains exactly what happens to your data",
     "🔐 New here? Penny helps you make an account first, so your stuff follows you to every device",
     "👀 \"Just look around\" is now view only, so you can explore without changing anything",
     "☁️ Sync! Sign in on your phone and laptop and your data follows you (My Stash)",
