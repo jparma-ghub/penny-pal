@@ -212,7 +212,22 @@ grant select, insert, update, delete on public.penny_data to authenticated;
 revoke all on public.penny_data from anon;
 ```
 
-If sync still says "permission denied", run the fix-it script in the section below.
+If sync still says "permission denied", run this fix-it script in the SQL Editor (safe to run more than once):
+
+```sql
+alter table public.penny_data enable row level security;
+drop policy if exists "read own" on public.penny_data;
+drop policy if exists "add own" on public.penny_data;
+drop policy if exists "change own" on public.penny_data;
+drop policy if exists "delete own" on public.penny_data;
+create policy "read own" on public.penny_data for select to authenticated using (auth.uid() = user_id);
+create policy "add own" on public.penny_data for insert to authenticated with check (auth.uid() = user_id);
+create policy "change own" on public.penny_data for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "delete own" on public.penny_data for delete to authenticated using (auth.uid() = user_id);
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.penny_data to authenticated;
+revoke all on public.penny_data from anon;
+```
 
 (The two `grant` lines matter on newer Supabase projects, which don't give signed-in users access to new tables automatically. Without them, sync says "permission denied for table penny_data".)
 
