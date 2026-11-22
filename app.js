@@ -67,6 +67,7 @@
       categories: C.categories.map((c) => Object.assign({}, c)),
       rules: C.autoRules.map(([match, cat]) => ({ match, cat })),
       transactions: [], subs: [], goals: [], accounts: [], netHistory: [], credit: [], reminders: [], dismissed: {},
+      feed: { ticks: {}, history: {}, full: {}, coins: {}, lastYm: "" },
       tax: { income: 0, otherIncome: 0, payFrequency: "biweekly", withheldPerPay: 0, rrsp: 0, fhsa: 0, unionDues: 0, childcare: 0, rentPaid: 0 },
       retire: { age: 28, retireAge: 65, balance: 0, monthly: 200, lump: 0, rate: 6, inflation: C.retirement.inflation, account: "RRSP", cpp: C.retirement.cppMonthlyDefault, includeGov: true },
       house: { price: 750000, saved: 0, monthlySave: 800, down: "min", firstTime: true, toronto: true, rate: 4.5, amort: 25, monthlyCosts: 650 },
@@ -336,6 +337,7 @@
   }
   function evaluate() {
     const p = state.profile;
+    try { evalFeed(); } catch (e) { /* never let Penny's belly break the app */ }
     evalWeekly();
     evalPath();
     for (const q of C.quests) {
@@ -894,7 +896,7 @@
         (bill ? '<span class="chip">🔔 ' + esc(bill.text.replace(/ charges .*/, "")) + " " + (billDays === 0 ? "today" : billDays === 1 ? "tomorrow" : "in " + billDays + " days") + "</span>" : "") +
         "</div></div>" + '<div class="hero-side">' + monthNav() + '<div class="penny-speak">' + (line && pennyOn() ? '<div class="bubble-say">' + esc(line) + "</div>" : "") + mascot(170, null, mood.pose) + "</div>" + (mood.why ? '<div class="penny-why">' + esc(mood.why) + "</div>" : "") + "</div></div>" + (C.heroImage ? "" : skyline()) + "</section>" +
 
-        nextStepCard() +
+        feedCard() + nextStepCard() +
 
         '<div class="grid tiles3">' +
         tile("briefcase", "#5fae7c", "Money in", money(m.income), "💰") +
@@ -918,7 +920,8 @@
   // Which mood Penny is in on the Home banner (the list lives in config.js)
   function heroMood(left) {
     const hr = new Date().getHours(), w = state.ui.weather;
-    const fits = { calm: !!state.ui.calm, over: left < 0, sleepy: hr >= 22 || hr < 5, snow: !!(w && w.snow && Date.now() - w.at < 3 * 3600000), happy: true };
+    const fs = feedOn() && !state.isExample ? feedStatus() : null;
+    const fits = { calm: !!state.ui.calm, over: left < 0, sleepy: hr >= 22 || hr < 5, hungry: !!(fs && fs.stage.id === "hungry" && fs.day >= 8), snow: !!(w && w.snow && Date.now() - w.at < 3 * 3600000), happy: true };
     return (C.heroMoods || []).find((m) => fits[m.id]) || { pose: "happy", greeting: "{hello}{name}", say: "", why: "" };
   }
   function heroPose(left) { return heroMood(left).pose; }
@@ -963,7 +966,7 @@
     E: { name: "Mochi Penny", desc: "Squishy, happy and hugging a gold coin" }
   };
   // Which picture to use for a pose, borrowing a close one if it doesn't exist yet
-  const POSE_BACKUP = { wave: "happy", comfort: "happy", sad: "comfort", thinking: "happy", reading: "thinking", sleepy: "happy", cozy: "celebrate", goodbye: "happy", taxes: "thinking", trophy: "celebrate", explorer: "proud", jar: "coin", growth: "proud", retire: "sleepy", home: "cozy", alarm: "goodbye", calm: "sleepy", streak: "proud", party: "celebrate", celebrate: "happy", proud: "happy", coin: "happy", surprised: "happy" };
+  const POSE_BACKUP = { "belly-stuffed": "celebrate", "belly-happy": "proud", "belly-ok": "happy", "belly-peckish": "thinking", "belly-hungry": "sad", wave: "happy", comfort: "happy", sad: "comfort", thinking: "happy", reading: "thinking", sleepy: "happy", cozy: "celebrate", goodbye: "happy", taxes: "thinking", trophy: "celebrate", explorer: "proud", jar: "coin", growth: "proud", retire: "sleepy", home: "cozy", alarm: "goodbye", calm: "sleepy", streak: "proud", party: "celebrate", celebrate: "happy", proud: "happy", coin: "happy", surprised: "happy" };
   function poseSrc(pose) {
     const imgs = C.mascotImages || {};
     for (let p = pose || "happy", i = 0; p && i < 6; p = POSE_BACKUP[p], i++) if (imgs[p]) return imgs[p];
@@ -978,7 +981,9 @@
     if (!pageSrcs || !src) return src;
     if (pageSrcs.has(src)) {
       const imgs = C.mascotImages || {};
-      const alt = POSE_SWAP.map((p) => imgs[p]).find((x) => x && !pageSrcs.has(x));
+      // swap to a picture with the same feeling first, so a sad Penny never turns into a happy one
+      const SAME_MOOD = { "belly-hungry": ["comfort", "sad"], sad: ["comfort"], comfort: ["sad"], "belly-peckish": ["thinking", "comfort", "reading"], "belly-ok": ["happy", "coin", "wave"], "belly-happy": ["proud", "happy", "coin"], "belly-stuffed": ["celebrate", "party", "trophy", "proud"] };
+      const alt = (SAME_MOOD[pose] || []).concat(POSE_SWAP).map((p) => imgs[p]).find((x) => x && !pageSrcs.has(x));
       if (alt) src = alt;
     }
     pageSrcs.add(src);
@@ -1868,6 +1873,111 @@
     setInterval(() => { if (document.visibilityState === "visible") syncNow(); }, 60000);
   }
 
+  /* ==================================================================
+     Feed Penny: a monthly coin belly (like a Tamagotchi)
+     Her belly starts empty each month. Money chores feed her coins (see feedPenny in config.js).
+     Her mood compares your coins with where an even pace would be today.
+     ================================================================== */
+  const FP = C.feedPenny || {};
+  const feedOn = () => FP.on !== false && Array.isArray(FP.chores);
+  function feedBox() { const f = state.feed || (state.feed = {}); for (const k of ["ticks", "history", "full", "coins", "done"]) f[k] = f[k] || {}; return f; }
+  function feedStatus(ym) {
+    feedBox();
+    const now = today(), cur = thisMonth(); ym = ym || cur;
+    const [y, m] = ym.split("-").map(Number), days = new Date(y, m, 0).getDate();
+    const day = ym === cur ? now.getDate() : ym < cur ? days : 0;
+    const M = { ym, inMonth: (d) => typeof d === "string" && d.slice(0, 7) === ym };
+    const chores = FP.chores.map((c) => {
+      let done = false, prog = null;
+      try {
+        if (c.progress) { prog = c.progress(state, M); done = prog[0] >= prog[1]; }
+        else done = !!c.check(state, M);
+      } catch (e) { done = false; }
+      return { c, done, prog, got: done ? c.coins : 0 };
+    });
+    const visits = new Set((state.profile.checkins || []).filter((d) => M.inMonth(d)));
+    const weeks = [0, 1, 2, 3].map((w) => {
+      const from = w * 7 + 1, to = w === 3 ? days : w * 7 + 7;
+      let n = 0; for (let d = from; d <= to; d++) if (visits.has(ym + "-" + String(d).padStart(2, "0"))) n++;
+      const started = day >= from, done = n >= (FP.weeklyDays || 2);
+      return { w: w + 1, from, to, n, done, started, current: day >= from && day <= to, got: done ? FP.weeklyCoins || 5 : 0 };
+    });
+    const coins = Math.min(100, chores.reduce((a, x) => a + x.got, 0) + weeks.reduce((a, x) => a + x.got, 0));
+    const expected = Math.round((100 * day) / days), behind = expected - coins;
+    const S = (id) => (FP.stages || []).find((x) => x.id === id) || { id, pose: "happy", emoji: "🐷", name: id, say: "" };
+    const stage = coins >= 100 ? S("stuffed") : behind <= 0 ? S("happy") : behind <= 20 ? S("content") : behind <= 40 ? S("peckish") : S("hungry");
+    return { ym, day, days, coins, expected, behind, stage, chores, weeks };
+  }
+  function evalFeed() {
+    if (!feedOn() || state.isExample) return;
+    const f = feedBox(), cur = thisMonth();
+    // a new month: remember how last month went, then Penny's belly starts fresh
+    if (f.lastYm && f.lastYm !== cur && f.history[f.lastYm] === undefined) {
+      const lastYm = f.lastYm, last = feedStatus(lastYm); f.history[lastYm] = last.coins;
+      if (last.coins >= (FP.goodMonth || 80)) { award(FP.goodMonthXp || 100, "Happy month for Penny! 🐷"); setTimeout(() => celebrate("track", { emoji: "🪙", title: "Penny had a happy month!", sub: last.coins + " coins in " + monthLabel(lastYm) + ". Her belly starts fresh today." }), 900); }
+      else setTimeout(() => toast("🪙 New month, fresh start! Penny's belly is ready for some coins."), 1200);
+    }
+    f.lastYm = cur;
+    const st = feedStatus(cur), before = f.coins[cur], seen = f.done[cur];
+    // which chores (and weeks) just got done? cheer for each one
+    const nowDone = st.chores.filter((x) => x.done).map((x) => x.c.id).concat(st.weeks.filter((w) => w.done).map((w) => "week" + w.w));
+    const fresh = seen ? nowDone.filter((id) => !seen.includes(id)) : [];
+    f.done[cur] = nowDone; f.coins[cur] = st.coins;
+    if (fresh.length && st.coins < 100) feedCheer(fresh, st);
+    else if (!fresh.length && before !== undefined && st.coins > before) setTimeout(() => toast("🪙 +" + (st.coins - before) + " coins for Penny! Her belly is " + st.coins + "% full"), 400);
+    if (st.coins >= 100 && !f.full[cur]) {
+      f.full[cur] = todayISO(); award(FP.fullXp || 75, "Penny's belly is full!");
+      setTimeout(() => celebrate("track", { pose: "belly-stuffed", emoji: "🤩", title: "Penny is stuffed!", sub: "Every money chore done for " + monthLabel(cur) + ". What a routine!" }), 700);
+    }
+  }
+  function feedCheer(ids, st) {
+    const items = ids.map((id) => {
+      if (id.startsWith("week")) return { emoji: "📅", coins: FP.weeklyCoins || 5, cheer: FP.weeklyCheer || "Weekly check-in done!" };
+      const c = FP.chores.find((x) => x.id === id); return c ? { emoji: c.emoji, coins: c.coins, cheer: c.cheer || c.title + " done!" } : null;
+    }).filter(Boolean);
+    if (!items.length) return;
+    const total = items.reduce((a, x) => a + x.coins, 0), one = items.length === 1 ? items[0] : null;
+    const left = 100 - st.coins, nextUp = st.chores.find((x) => !x.done);
+    const tail = left <= 0 ? "" : left <= 20 ? " Almost full! Just " + left + " coins to go." : nextUp ? " Next snack: " + nextUp.c.title.toLowerCase() + "." : "";
+    setTimeout(() => {
+      celebrate("track", { pose: "coin", emoji: one ? one.emoji : "🪙", title: "+" + total + " coins for Penny! 🪙", sub: (one ? one.cheer : items.length + " chores done! You're on a roll.") + " Her belly is " + st.coins + "% full." + tail });
+      toast("🪙 +" + total + " coins · Penny's belly " + st.coins + "%");
+    }, 500);
+  }
+  function bellyBar(coins, big) {
+    return '<div class="belly' + (big ? " big" : "") + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + coins + '" aria-label="Penny\'s belly"><i style="width:' + coins + '%"></i><span>' + coins + " / 100 🪙</span></div>";
+  }
+  function feedCard() {
+    if (!feedOn()) return "";
+    const st = feedStatus(), next = st.chores.filter((x) => !x.done).slice(0, 2);
+    return '<div class="card feed-card">' + (pennyOn() ? '<button type="button" class="feed-penny" data-act="openFeed" aria-label="Open Feed Penny">' + mascot(118, "P", st.stage.pose) + "</button>" : '<div class="ci-emoji">' + st.stage.emoji + "</div>") +
+      '<div class="feed-main"><div class="label">Feed Penny · ' + esc(monthLabel(st.ym)) + "</div><h3>" + st.stage.emoji + " " + esc(st.stage.name) + '</h3><p class="small muted">' + esc(st.stage.say) + "</p>" +
+      bellyBar(st.coins) + '<div class="feed-next">' +
+      (next.length ? next.map((x) => '<button type="button" class="chip-btn" data-act="feedGo" data-id="' + x.c.id + '">' + x.c.emoji + " " + esc(x.c.title) + ' <b>+' + x.c.coins + "</b></button>").join("") : '<span class="small">🎉 Every chore done this month!</span>') +
+      '<button type="button" class="linklike small" data-act="openFeed">See all chores</button></div></div></div>';
+  }
+  function feedModal() {
+    const st = feedStatus(), f = feedBox(), tick = f.ticks[st.ym] || {};
+    const rows = st.chores.map((x) => {
+      const c = x.c, prog = x.prog ? ' <span class="tiny muted">' + Math.min(x.prog[0], x.prog[1]) + "/" + x.prog[1] + "</span>" : "";
+      let right;
+      if (x.done) right = '<span class="feed-done">' + icon("check") + " +" + c.coins + "</span>" + (c.manual && !state.flags.noCreditCard ? '<button type="button" class="linklike tiny muted" data-act="feedTick" data-id="' + c.id + '">undo</button>' : "");
+      else if (c.manual) right = '<button type="button" class="btn sm" data-act="feedTick" data-id="' + c.id + '">Done ✓</button>' + (c.id === "card" ? '<button type="button" class="btn ghost sm" data-act="feedNoCard">I don\'t have one</button>' : "");
+      else right = '<button type="button" class="btn soft sm" data-act="feedGo" data-id="' + c.id + '">Go <b>+' + c.coins + "</b></button>";
+      return '<div class="feed-row' + (x.done ? " done" : "") + '"><span class="feed-emoji">' + c.emoji + '</span><div class="feed-what"><b>' + esc(c.title) + "</b>" + prog + (c.how && !x.done ? '<p class="tiny muted">' + esc(c.how) + "</p>" : "") + '</div><div class="feed-right">' + right + "</div></div>";
+    }).join("");
+    const wk = st.weeks.map((w) => '<span class="feed-week' + (w.done ? " done" : w.current ? " now" : "") + '" title="Days ' + w.from + " to " + w.to + '">' + (w.done ? "🪙" : w.current ? w.n + "/" + (FP.weeklyDays || 2) : "·") + "<small>Wk " + w.w + "</small></span>").join("");
+    const past = Object.keys(f.history).sort().slice(-6);
+    openModal('<div class="stack feed-modal"><div class="feed-top">' + (pennyOn() ? mascot(150, "P", st.stage.pose) : '<div class="ci-emoji">' + st.stage.emoji + "</div>") +
+      '<div><h2>Feed Penny 🪙</h2><p class="small"><b>' + st.stage.emoji + " " + esc(st.stage.name) + "</b>. " + esc(st.stage.say) + "</p>" + bellyBar(st.coins, true) +
+      '<p class="tiny muted">Day ' + st.day + " of " + st.days + ". At an even pace she'd have about " + st.expected + " coins by today. Her belly starts fresh on the 1st.</p></div></div>" +
+      '<h3 class="feed-h">Monthly chores</h3><div class="feed-list">' + rows + "</div>" +
+      '<h3 class="feed-h">Weekly check-ins <span class="tiny muted">open Penny on ' + (FP.weeklyDays || 2) + " different days each week, +" + (FP.weeklyCoins || 5) + " coins</span></h3><div class=\"feed-weeks\">" + wk + "</div>" +
+      (past.length ? '<h3 class="feed-h">Past months</h3><div class="feed-past">' + past.map((ym) => '<span class="' + (f.history[ym] >= (FP.goodMonth || 80) ? "good" : "") + '"><b>' + f.history[ym] + "</b><small>" + esc(monthLabel(ym).split(" ")[0].slice(0, 3)) + "</small></span>").join("") + "</div>" : "") +
+      '<p class="tiny muted">Fill her belly to ' + (FP.goodMonth || 80) + "+ coins by the end of the month for a happy month (+" + (FP.goodMonthXp || 100) + " XP). Fill it all the way for +" + (FP.fullXp || 75) + " XP.</p>" +
+      '<div class="row"><button class="btn ghost" data-close>Close</button></div></div>');
+  }
+
   /* PAGE: Transactions ----------------------------------------------- */
   let pendingImport = null;
   PAGES.spending = {
@@ -2300,6 +2410,7 @@
     const L = levelInfo(), el = $("#topbar"); if (!el) return;
     el.innerHTML = '<a class="lvl" href="#rewards" style="text-decoration:none;color:inherit"><div class="badge-lv">' + L.n + '</div><div class="meta"><div class="row1"><b>' + esc(L.name) + '</b><span class="muted num">' + L.xp + " XP</span></div>" +
       '<div class="xpbar"><i style="width:' + (L.need ? (L.into / L.need) * 100 : 100) + '%"></i></div></div></a>' +
+      (feedOn() ? '<button type="button" class="belly-pill" data-act="openFeed" title="Penny\'s belly this month" aria-label="Penny\'s belly: ' + feedStatus().coins + ' coins">🪙 ' + feedStatus().coins + "</button>" : "") +
       '<span class="streak" title="Days in a row">' + icon("flame") + " " + state.profile.streak + "</span>" +
       '<button class="btn" data-act="addTx" aria-label="Add a transaction">' + icon("plus") + '<span class="lbl">Add</span></button>';
   }
@@ -2448,6 +2559,10 @@
      Button actions
      ================================================================== */
   const ACT = {
+    openFeed() { feedModal(); },
+    feedGo(el) { const c = FP.chores.find((x) => x.id === el.dataset.id); if (c) goTo(c.go, c.how); },
+    feedTick(el) { const f = feedBox(), ym = thisMonth(), t = f.ticks[ym] = f.ticks[ym] || {}; const id = el.dataset.id; if (t[id]) delete t[id]; else t[id] = todayISO(); commit(); feedModal(); },
+    feedNoCard() { state.flags.noCreditCard = true; commit(); feedModal(); toast("Got it! That one counts as done every month."); },
     lookMine() { closeModal(); ACT.startSetup(); },
     lookKeep() { closeModal(); },
     syncNow() { syncNow(true); },
@@ -2509,7 +2624,7 @@
     flipImport() { pendingImport.flip = !pendingImport.flip; pendingImport.rows = buildImport(pendingImport.raw, pendingImport.flip).rows; render(); },
     cancelImport() { pendingImport = null; render(); },
     doImport() {
-      const rows = pendingImport.rows.map((r) => Object.assign({ id: uid(), added: todayISO() }, r));
+      const rows = pendingImport.rows.map((r) => Object.assign({ id: uid(), added: todayISO(), src: "import" }, r));
       state.transactions.push(...rows); state.flags.imported = true; state.flags.importOn = todayISO();
       if (rows.length) state.ui.month = rows.map((r) => r.date).sort().pop().slice(0, 7);
       pendingImport = null; award(Math.min(100, rows.length * 2), "Imported " + rows.length + " transactions"); commit();
@@ -2754,7 +2869,7 @@
      ================================================================== */
   function formData(f) { const d = {}; new FormData(f).forEach((v, k) => (d[k] = v)); return d; }
   /* "Just look around" mode: example data you can browse but not change */
-  const LOOK_OK_ACTS = new Set(["month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
+  const LOOK_OK_ACTS = new Set(["openFeed", "month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
     "wzStart", "wzSignIn", "wzAuthToggle", "wzAuthSkip", "wzExample", "wzHome", "wzLater", "wzBack", "wzSkip", "wzCheckin"]);
   const LOOK_OK_CHANGES = new Set(["txSearch", "txCat", "calmMode", "celebrate"]);
   function lookOnlyBlocks(el, kind) {

@@ -168,6 +168,27 @@ The simplest free way: put the folder online with **Netlify Drop** (app.netlify.
 - **Safety checks:** files over 20 MB, empty files, broken pictures, locked PDFs and file types it can't read all show a friendly message instead of an error. If the same amount on the same date is already logged, you get a "this might be a repeat" warning.
 - **iPhone tip:** if a HEIC photo won't open, take a screenshot of the receipt, or set Settings, Camera, Formats to "Most Compatible".
 
+## Feed Penny (monthly coin belly)
+
+Penny's belly starts empty on the 1st of every month. Money chores feed her coins, up to 100:
+
+| Chore | Coins | How it's counted |
+|---|---|---|
+| Log 10 transactions | 15 | automatic |
+| Bring in a bank statement or scan a receipt | 10 | automatic |
+| Review your bills and subscriptions | 10 | automatic |
+| Update your account balances | 15 | automatic |
+| Pay yourself first (savings, TFSA, RRSP or a goal) | 15 | automatic |
+| Peek at your budget | 5 | automatic |
+| Pay your credit card in full | 10 | tap Done (or "I don't have one" once) |
+| Weekly check-in (open Penny on 2+ days a week) | 5 a week | automatic |
+
+Her mood compares your coins with where an even pace would be today, so early in the month she's never "behind". Fall behind and she gets peckish, then hungry (Home shows it too). Every chore pops up a celebration with the coins. A full belly gives +75 XP, and 80+ coins at month end is a happy month (+100 XP).
+
+Change chores, coins, cheers or moods in `config.js` under `FEED PENNY`. Each chore has a `check` (or `progress`) that looks at your data for this month.
+
+**Pictures for her moods:** add `belly-stuffed`, `belly-happy`, `belly-ok`, `belly-peckish` and `belly-hungry` to `mascotImages` once you have them. Until then she borrows celebrate, proud, happy, thinking and sad.
+
 ## Sync setup (phone + laptop)
 
 Sync uses Supabase, a free online database. You set it up once and everyone using your link (you and your friends) can sync. Each person signs in with their own email and only ever sees their own data.

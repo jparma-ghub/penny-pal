@@ -798,3 +798,50 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .privacy-item p { margin-top: 2px; }
 .privacy-note { text-align: left; max-width: 360px; width: 100%; }
 .privacy-card summary { cursor: pointer; font-weight: 600; }
+
+/* Feed Penny */
+.feed-card { display: flex; gap: 16px; align-items: center; background: linear-gradient(135deg, #fff6e0, var(--surface) 65%); }
+.feed-penny { all: unset; cursor: pointer; flex: none; border-radius: 50%; }
+.feed-penny:focus-visible { outline: 3px solid var(--accent); }
+.feed-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.feed-main h3 { margin: 0; }
+.belly { position: relative; height: 22px; border-radius: 99px; background: #f3e7d2; overflow: hidden; box-shadow: inset 0 1px 3px rgba(120, 90, 40, .15); }
+.belly i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: linear-gradient(90deg, #f6cf6b, #f2b94a); transition: width .6s ease; }
+.belly span { position: relative; display: block; text-align: center; font: 700 .74rem/22px var(--font-display, inherit); color: #6b4c12; }
+.belly.big { height: 28px; } .belly.big span { line-height: 28px; font-size: .85rem; }
+.feed-next { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; }
+.chip-btn { all: unset; cursor: pointer; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; padding: 5px 11px; font-size: .8rem; font-weight: 600; }
+.chip-btn b { color: #b07a12; }
+.chip-btn:hover, .chip-btn:focus-visible { border-color: var(--accent); }
+.belly-pill { all: unset; cursor: pointer; background: #fff1cf; color: #7a5410; border-radius: 99px; padding: 6px 11px; font-weight: 700; font-size: .9rem; white-space: nowrap; }
+.belly-pill:focus-visible { outline: 2px solid var(--accent); }
+.feed-modal .feed-top { display: flex; gap: 14px; align-items: center; }
+.feed-modal .feed-top > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.feed-h { font-size: 1rem; margin: 6px 0 0; }
+.feed-list { display: flex; flex-direction: column; gap: 8px; }
+.feed-row { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 14px; background: var(--surface-2); }
+.feed-row.done { background: color-mix(in srgb, var(--good) 10%, var(--surface)); }
+.feed-row.done .feed-what b { color: var(--muted); }
+.feed-emoji { font-size: 1.3rem; flex: none; }
+.feed-what { flex: 1; min-width: 0; font-size: .9rem; }
+.feed-what p { margin: 2px 0 0; }
+.feed-right { display: flex; gap: 6px; align-items: center; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.feed-done { color: var(--good); font-weight: 700; font-size: .85rem; display: inline-flex; gap: 3px; align-items: center; }
+.feed-weeks, .feed-past { display: flex; gap: 8px; flex-wrap: wrap; }
+.feed-week, .feed-past span { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 58px; height: 58px; border-radius: 16px; background: var(--surface-2); font-weight: 700; font-size: 1.1rem; }
+.feed-week small, .feed-past small { font-size: .66rem; color: var(--muted); font-weight: 600; }
+.feed-week.done { background: #fff1cf; } .feed-week.now { outline: 2px dashed #e7c46a; }
+.feed-past span.good { background: #fff1cf; }
+@media (max-width: 560px) {
+  .feed-card { align-items: flex-start; gap: 10px; }
+  .feed-card .feed-penny .mascot-img { width: 86px !important; height: 86px !important; } .feed-card .feed-penny .mascot-img img { width: 86px; height: 86px; }
+  .feed-modal .feed-top .mascot-img { width: 104px !important; height: 104px !important; } .feed-modal .feed-top .mascot-img img { width: 104px; height: 104px; }
+  .feed-row { flex-wrap: wrap; } .feed-right { flex: 1 1 100%; justify-content: flex-start; padding-left: 34px; }
+  .belly-pill { padding: 5px 8px; font-size: .82rem; }
+}
+@media (prefers-reduced-motion: no-preference) { .feed-card .mascot-img img { animation: pp-float 4s ease-in-out infinite; } }
+.topbar .lvl { min-width: 0; }
+.topbar .lvl .meta { min-width: 0; }
+.topbar .row1 { white-space: nowrap; min-width: 0; gap: 6px; }
+.topbar .row1 b { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (max-width: 400px) { .topbar .row1 .num { display: none; } }

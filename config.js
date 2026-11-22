@@ -30,8 +30,9 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and add a line to whatsNew.
   // People who already use the app see a "What's new" popup once.
-  version: "3.2",
+  version: "3.3",
   whatsNew: [
+    "🪙 Feed Penny! Do your monthly money chores to fill her coin belly. She gets happier as you go, and starts fresh every month",
     "🔐 Your synced data is now locked with your password. Nobody else can read it, not even the people who run Penny Pal",
     "🙈 A new Your privacy card in My Stash explains exactly what happens to your data",
     "🔐 New here? Penny helps you make an account first, so your stuff follows you to every device",
@@ -92,6 +93,46 @@ window.CONFIG = {
     website: "https://jparma-ghub.github.io/penny-pal/"
   },
 
+  /* ---------- FEED PENNY (monthly coin belly) ----------
+     Penny's belly starts empty on the 1st of every month. Money chores feed her coins.
+     Her mood follows your pace through the month, so she only gets hungry if you fall behind.
+     check(s, M) says if a chore is done this month. M.ym is "2026-11", M.inMonth(date) is true for dates this month.
+     go = where tapping the chore takes you (same as quests). Coins should add up to 100. */
+  feedPenny: {
+    on: true,
+    weeklyCoins: 5,          // per week where you open Penny on 2+ different days (4 weeks = 20 coins)
+    weeklyDays: 2,
+    weeklyCheer: "Two check-ins this week! Little habits make a big piggy.",
+    fullXp: 75,              // when her belly hits 100 in a month
+    goodMonth: 80,           // coins needed for a "happy month" at month end
+    goodMonthXp: 100,
+    chores: [
+      { id: "log", emoji: "🧾", title: "Log 10 transactions", coins: 15, cheer: "10 transactions logged this month! You know exactly where your money goes.", go: { page: "spending", act: "addTx" },
+        progress: (s, M) => [s.transactions.filter((t) => !t.example && M.inMonth(t.date)).length, 10] },
+      { id: "statement", emoji: "📥", title: "Bring in a bank statement or scan a receipt", coins: 10, cheer: "Statement in! Penny loves fresh numbers.", go: { page: "spending", act: "toggleImport" },
+        check: (s, M) => M.inMonth(s.flags.importOn) || s.transactions.some((t) => (t.receipt || t.src === "import") && M.inMonth(t.added)) },
+      { id: "bills", emoji: "📺", title: "Review your bills and subscriptions", coins: 10, cheer: "Bills checked! No sneaky charges getting past you.", go: { page: "bills" },
+        check: (s, M) => s.subs.some((x) => !x.example && M.inMonth(x.reviewed)) || M.inMonth((s.feed.ticks[M.ym] || {}).bills) },
+      { id: "balances", emoji: "🏦", title: "Update your account balances", coins: 15, cheer: "Balances updated! Now you can see the pig picture.", go: { page: "networth" },
+        check: (s, M) => s.accounts.some((a) => !a.example && M.inMonth(a.updated)) },
+      { id: "payself", emoji: "🐷", title: "Pay yourself first (savings, TFSA, RRSP or a goal)", coins: 15, cheer: "You paid yourself first! Future you says thank you.", go: { page: "goals" },
+        check: (s, M) => s.goals.some((g) => (g.history || []).some((h) => M.inMonth(h.date))) || s.transactions.some((t) => !t.example && ["emergency", "invest"].includes(t.cat) && M.inMonth(t.date)) },
+      { id: "budget", emoji: "👛", title: "Peek at your budget", coins: 5, cheer: "Budget checked! Knowing is half the battle.", go: { page: "budgets" },
+        check: (s, M) => M.inMonth((s.flags.visits || {}).budgets) },
+      { id: "card", emoji: "💳", title: "Pay your credit card in full", coins: 10, manual: true, cheer: "You paid your credit card in full! Zero interest for the bank, more coins for Penny.",
+        how: "Tap Done once you've paid this month's statement. No credit card? Tap \"I don't have one\".",
+        check: (s, M) => !!s.flags.noCreditCard || !!(s.feed.ticks[M.ym] || {}).card }
+    ],
+    // Penny's moods. "behind" = how many coins short of where you'd be at an even pace today.
+    stages: [
+      { id: "stuffed", pose: "belly-stuffed", emoji: "🤩", name: "Stuffed and thriving", say: "I'm SO full! Best money month ever. You're amazing!" },
+      { id: "happy", pose: "belly-happy", emoji: "😊", name: "Happy and well fed", say: "Yum! I'm feeling great. We're right on track this month." },
+      { id: "content", pose: "belly-ok", emoji: "🙂", name: "Doing okay", say: "I'm doing okay! A snack or two would make me even happier." },
+      { id: "peckish", pose: "belly-peckish", emoji: "🥺", name: "A little peckish", say: "My tummy's rumbling a bit... could we do a money chore today?" },
+      { id: "hungry", pose: "belly-hungry", emoji: "😢", name: "Hungry", say: "I'm really hungry... even one little chore would help so much!" }
+    ]
+  },
+
   // The big welcome card each page shows the first time someone opens it.
   // The ? next to every page name opens it again. "say" is Penny's line, "points" are the 3 bullets.
   pageIntros: {
@@ -126,6 +167,8 @@ window.CONFIG = {
       say: "Oh no, we went a little over this month. That's okay! Let's look at it together.", why: "🥺 Over your spending plan this month. It happens!" },
     { id: "sleepy", when: "10 pm to 5 am", night: true, pose: "sleepy", greeting: "Up late{name}? 🌙",
       say: "Zzz... oh! Hi! Don't stay up too late. Your budget will be here tomorrow.", why: "💤 It's late, so Penny is napping (10 pm to 5 am)" },
+    { id: "hungry", when: "Penny's belly is low for this point in the month", pose: "belly-hungry", greeting: "{hello}{name} 🥺",
+      say: "My tummy's rumbling! Could you feed me one money chore today?", why: "🍽️ Penny's belly is low this month. Do a chore to feed her" },
     { id: "snow", when: "It's snowing in your city", pose: "cozy", greeting: "Brrr, {hello}{name} ❄️",
       say: "It's snowing outside! Perfect day to stay cozy and save.", why: "❄️ It's snowing in Toronto, so Penny bundled up" },
     { id: "happy", when: "Any other time", pose: "happy", greeting: "{hello}{name} ☀️",
