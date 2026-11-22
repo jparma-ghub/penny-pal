@@ -588,28 +588,81 @@
     return out.sort((a, b) => a.date - b.date);
   }
   // Finds charges that repeat about once a month for a similar amount
+  /* Recurring charges: find what repeats every month and link payments to your bills */
+  const KNOWN_SUBS = /netflix|spotify|disney|crave|apple\.com\/bill|apple ?music|icloud|google ?(storage|one)|youtube|amazon ?prime|prime ?video|audible|patreon|adobe|microsoft|xbox|playstation|nintendo|chatgpt|openai|dropbox|canva|duolingo|rogers|bell (canada|mobility)?|telus|fido|koodo|freedom mobile|virgin plus|public mobile|goodlife|fit4less|planet fitness|anytime fitness|uber ?one|doordash ?pass|skip ?plus|paramount|hayu|britbox/i;
+  function merchantKey(desc) {
+    return String(desc || "").toUpperCase()
+      .replace(/^(INTERAC|CONTACTLESS|ONLINE BANKING|PRE-?AUTHORI[ZS]ED|POS|PURCHASE|DEBIT|PAYMENT|BILL PAYMENT|PAD|E-?TRANSFER SENT|RECURRING)\b[\s\-:]*/g, "")
+      .replace(/\b(INTERAC|CONTACTLESS|PURCHASE|PAYMENT|ONLINE|BANKING|PRE-?AUTHORI[ZS]ED|TORONTO|MISSISSAUGA|VANCOUVER|ON|CA|CAN)\b/g, " ")
+      .replace(/[#*]?\d[\d\-./]*/g, " ").replace(/\.(COM|CA|NET)\b/g, "").replace(/[^A-Z&+ ]/g, " ").replace(/\s+/g, " ").trim().slice(0, 28);
+  }
+  const sameMerchant = (a, b) => { const x = a.split(" ")[0], y = b.split(" ")[0]; return !!x && !!y && x.length > 2 && (a.includes(y) || b.includes(x)); };
+  function matchBill(t) {
+    if (t.kind !== "expense") return null;
+    const k = merchantKey(t.desc); if (!k) return null;
+    return state.subs.find((sb) => sb.status !== "cancelled" && sameMerchant(merchantKey(sb.name), k) && Math.abs(+t.amount - +sb.amount) <= Math.max(3, +sb.amount * 0.25)) || null;
+  }
+  // When a bill's payment shows up, mark it paid and move its next charge forward
+  function markBillsPaid(list) {
+    const paid = [];
+    for (const t of list) {
+      const sb = matchBill(t); if (!sb) continue;
+      if (sb.lastPaid && sb.lastPaid >= t.date) continue;
+      const changed = Math.abs(+t.amount - +sb.amount) > 0.01 ? +sb.amount : null;
+      sb.lastPaid = t.date; sb.lastPaidAmt = +t.amount;
+      if (changed !== null) { sb.priceWas = changed; sb.amount = +t.amount; }
+      let nx = parseISO(t.date); const anchor = nx.getDate(); nx = advance(nx, sb.cycle || "monthly", anchor); sb.next = toISO(nx);
+      paid.push({ sb, t, changed });
+    }
+    return paid;
+  }
+  function paidThisCycle(sb) {
+    if (!sb.lastPaid) return false;
+    const due = nextCharge(sb), prev = new Date(due); prev.setMonth(prev.getMonth() - ((sb.cycle === "yearly") ? 12 : sb.cycle === "quarterly" ? 3 : 1));
+    return parseISO(sb.lastPaid) > new Date(prev.getTime() - 5 * 86400000);
+  }
   function detectSubs() {
-    const skip = new Set(["groceries", "dining", "coffee", "transit", "fun", "shopping", "rent", "invest", "emergency"]);
-    const known = state.subs.map((s) => s.name.toUpperCase());
+    const skip = new Set(["groceries", "dining", "coffee", "transit", "fun", "shopping", "invest", "emergency", "gifts"]);
     const groups = {};
     for (const t of state.transactions) {
-      if (t.kind !== "expense" || skip.has(t.cat)) continue;
-      const key = t.desc.toUpperCase().replace(/[#*]?\d[\d\-.]*/g, "").replace(/\.(COM|CA)\b/g, "").replace(/\s+/g, " ").trim().slice(0, 24);
-      if (!key) continue;
+      if (t.kind !== "expense" || t.example) continue;
+      const key = merchantKey(t.desc); if (!key || key.length < 3) continue;
       (groups[key] = groups[key] || []).push(t);
     }
     const out = [];
     for (const [key, list] of Object.entries(groups)) {
-      const months = new Set(list.map((t) => t.date.slice(0, 7)));
-      if (months.size < 2 || list.length > months.size * 1.5) continue;
+      if (state.subs.some((sb) => sameMerchant(merchantKey(sb.name), key))) continue; // already a bill
+      list.sort((a, b) => a.date.localeCompare(b.date));
+      const last = list[list.length - 1], months = new Set(list.map((t) => t.date.slice(0, 7)));
       const amts = list.map((t) => +t.amount).sort((a, b) => a - b), mid = amts[Math.floor(amts.length / 2)];
-      if (!amts.every((a) => Math.abs(a - mid) <= mid * 0.15)) continue;
-      const name = key.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-      if (known.some((k) => k.includes(key.split(" ")[0]) || key.includes(k.split(" ")[0]))) continue;
-      const last = list.sort((a, b) => b.date.localeCompare(a.date))[0];
-      out.push({ name, amount: +last.amount, cycle: "monthly", next: toISO(addMonths(parseISO(last.date), 1)), cat: last.cat });
+      const steady = amts.every((a) => Math.abs(a - mid) <= Math.max(2, mid * 0.15));
+      const days = list.map((t) => +t.date.slice(8, 10)).sort((a, b) => a - b), usualDay = days[Math.floor(days.length / 2)];
+      const gaps = list.slice(1).map((t, i) => daysBetween(parseISO(list[i].date), parseISO(t.date)));
+      const monthlyGaps = gaps.length && gaps.every((g) => g >= 25 && g <= 36);
+      let why = "";
+      if (months.size >= 2 && steady && monthlyGaps && !skip.has(last.cat)) why = "Charged " + months.size + " months in a row, around the " + ordinal(usualDay);
+      else if (KNOWN_SUBS.test(last.desc) && steady) why = "Looks like a monthly subscription";
+      else continue;
+      let next = new Date(parseISO(last.date).getFullYear(), parseISO(last.date).getMonth() + 1, Math.min(usualDay, 28));
+      while (next < today()) next = addMonths(next, 1, usualDay);
+      const name = titleCaseWords(key);
+      out.push({ name, amount: +last.amount, cycle: "monthly", next: toISO(next), cat: last.cat, day: usualDay, why, lastPaid: last.date });
     }
     return out;
+  }
+  const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th");
+  const titleCaseWords = (t) => t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/\bTd\b|\bRbc\b|\bBmo\b|\bCibc\b|\bTtc\b|\bEq\b/g, (x) => x.toUpperCase());
+  // After an import: tell the person which bills got paid and offer to add new repeating charges
+  function billCheckModal(paid) {
+    const found = detectSubs(); window.__found = found;
+    const latest = {}; paid.forEach((x) => { if (!latest[x.sb.id] || latest[x.sb.id].t.date < x.t.date) latest[x.sb.id] = Object.assign({}, x, { changed: x.changed !== null ? x.changed : latest[x.sb.id] ? latest[x.sb.id].changed : null }); });
+    paid = Object.values(latest);
+    if (!paid.length && !found.length) return;
+    openModal('<div class="stack"><div class="row" style="flex-wrap:nowrap;gap:12px">' + (pennyOn() ? mascot(90, "P", "surprised") : "") + '<div><h2>Penny checked your bills</h2><p class="small muted">From the transactions you just brought in.</p></div></div>' +
+      (paid.length ? '<h3 class="feed-h">✅ Bills paid</h3><div class="list">' + paid.map((x) => '<div class="item">' + bubble(x.sb.icon || "repeat", "#5fae7c") + '<div class="grow"><div class="t">' + esc(x.sb.name) + '</div><div class="tiny muted">Paid ' + esc(dayLabel(parseISO(x.t.date))) + " · next " + esc(dayLabel(nextCharge(x.sb))) + (x.changed !== null ? ' · <span class="warn">price changed from ' + money2(x.changed) + "</span>" : "") + '</div></div><span class="amt">' + money2(x.t.amount) + "</span></div>").join("") + "</div>" : "") +
+      (found.length ? '<h3 class="feed-h">🔁 Repeating charges Penny found</h3><p class="tiny muted">Tick the ones you want in Bills & subscriptions. Penny will remind you before they\'re charged and mark them paid when they show up.</p><div class="list">' +
+        found.map((f, i) => '<label class="item found-item"><input type="checkbox" name="found" value="' + i + '" checked>' + bubble("repeat", "#9d94ea") + '<div class="grow"><div class="t">' + esc(f.name) + '</div><div class="tiny muted">' + esc(f.why) + " · next about " + esc(dayLabel(parseISO(f.next))) + " · " + esc(catById(billCat({ name: f.name, cat: f.cat })).name) + '</div></div><span class="amt">' + money2(f.amount) + "/mo</span></label>").join("") + "</div>" : "") +
+      '<div class="row">' + (found.length ? '<button class="btn" data-act="addFoundAll">' + icon("plus") + " Add to Bills</button>" : "") + '<button class="btn ghost" data-close>' + (found.length ? "Not now" : "Nice!") + "</button></div></div>");
   }
 
   /* ------------------------------------------------------------------
@@ -1448,14 +1501,14 @@
       img.src = url;
     });
   }
-  async function readPdf(file) {
+  async function readPdf(file, maxPages) {
     await loadScript(LIBS.pdfWorker).catch(() => null); // lets pdf.js run without a separate worker
     await loadScript(LIBS.pdf);
     const lib = window.pdfjsLib; if (!lib) throw new Error("pdf_unavailable");
     lib.GlobalWorkerOptions.workerSrc = LIBS.pdfWorker;
     const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
     let text = "";
-    for (let i = 1; i <= Math.min(doc.numPages, 3); i++) {
+    for (let i = 1; i <= Math.min(doc.numPages, maxPages || 3); i++) {
       const tc = await (await doc.getPage(i)).getTextContent(), rows = {};
       for (const it of tc.items) { const y = Math.round(it.transform[5] / 3); (rows[y] = rows[y] || []).push(it); }
       Object.keys(rows).sort((a, b) => b - a).forEach((y) => { text += rows[y].sort((a, b) => a.transform[4] - b.transform[4]).map((x) => x.str).join(" ") + "\n"; });
@@ -1535,7 +1588,7 @@
   }
   const RECEIPT_WORDS = [
     [/grocer|supermarket|produce|bakery|deli\b/i, "groceries"], [/pharmacy|drug\s*mart|prescription|clinic|dental|physio|optical/i, "health"],
-    [/coffee|caf[eé]|espresso|latte|cappuccino/i, "coffee"], [/restaurant|bistro|grill|pizz|sushi|shawarma|burger|ramen|take-?out|gratuity|\btip\b|server/i, "dining"],
+    [/coffee|caf[eé]|espresso|latte|cappuccino/i, "coffee"], [/uber ?eats|doordash|skip ?the ?dishes|ritual/i, "dining"], [/restaurant|bistro|grill|pizz|sushi|shawarma|burger|ramen|take-?out|gratuity|\btip\b|server/i, "dining"],
     [/hydro|electricity|enbridge|natural gas|water bill|utilit/i, "utilities"], [/internet|wireless|mobile|cellular|phone bill|data plan/i, "phone"],
     [/insurance|premium|policy\s*(no|number|#)/i, "insurance"], [/\brent\b|lease|landlord|property management/i, "rent"],
     [/presto|transit|parking|fuel|gasoline|petro|esso|shell|taxi|\bttc\b|\bgo train/i, "transit"], [/subscription|membership|monthly plan|renews|renewal/i, "subs"],
@@ -2063,6 +2116,145 @@
       '<div class="row"><button class="btn ghost" data-close>Close</button></div></div>');
   }
 
+  /* ==================================================================
+     Bank statements as PDF or screenshots
+     - PDF statements: the text is read on your device and each line that starts
+       with a date and has an amount becomes a transaction.
+     - Screenshots / photos / scanned PDFs: read by Claude (inside Claude) or by
+       the free text reader (on the website), then the same line reader.
+     - Everything goes to the same review screen as CSV imports.
+     ================================================================== */
+  const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+  const MONEY_RX = /\(?-?\$?\s?\d{1,3}(?:,\d{3})*\.\d{2}\)?(?:\s?(?:CR|DR))?|\(?-?\$?\s?\d+\.\d{2}\)?(?:\s?(?:CR|DR))?/gi;
+  function moneyToken(tok) {
+    const neg = /^\(|\)$|^-|-\$|CR$/i.test(tok.trim());
+    const v = parseFloat(tok.replace(/[^\d.]/g, ""));
+    return { v: isFinite(v) ? v : null, neg };
+  }
+  function statementYear(text) {
+    const ys = (text.match(/\b20\d{2}\b/g) || []).map(Number).filter((y) => y > 2000 && y <= new Date().getFullYear() + 1);
+    if (!ys.length) return new Date().getFullYear();
+    const count = {}; ys.forEach((y) => { count[y] = (count[y] || 0) + 1; });
+    return +Object.keys(count).sort((a, b) => count[b] - count[a] || b - a)[0];
+  }
+  function lineDate(line, year) {
+    let m, y = year, mo, d, rest;
+    if ((m = line.match(/^\s*(\d{4})-(\d{2})-(\d{2})\b/))) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else if ((m = line.match(/^\s*(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i))) { mo = MON[m[1].toLowerCase()]; d = +m[2]; if (m[3]) y = +m[3]; }
+    else if ((m = line.match(/^\s*(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?(?:,?\s+(\d{4}))?\b/i))) { d = +m[1]; mo = MON[m[2].toLowerCase()]; if (m[3]) y = +m[3]; }
+    else if ((m = line.match(/^\s*(\d{1,2})[\/.](\d{1,2})(?:[\/.](\d{2,4}))?\b/))) { let a = +m[1], b = +m[2]; if (a > 12) { d = a; mo = b; } else { mo = a; d = b; } if (m[3]) y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; }
+    else return null;
+    rest = line.slice(m[0].length);
+    // credit cards often show two dates (bought, then posted): skip the second one
+    const again = rest.match(/^\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+\d{1,2}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?|\d{1,2}[\/.]\d{1,2}(?:[\/.]\d{2,4})?|\d{4}-\d{2}-\d{2})\b/i);
+    if (again) rest = rest.slice(again[0].length);
+    const dt = new Date(y, mo - 1, d);
+    if (!mo || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    // a "Dec 28" on a statement printed in January belongs to last year
+    if (dt > new Date(Date.now() + 3 * 86400000)) dt.setFullYear(dt.getFullYear() - 1);
+    return { date: toISO(dt), rest };
+  }
+  const SKIP_LINE = /opening balance|closing balance|balance forward|previous balance|new balance|total|subtotal|minimum payment|credit limit|available credit|interest rate|annual interest|statement (date|period)|page \d|account number|amount due/i;
+  const MONEY_IN = /deposit|payroll|pay ?cheque|salary|direct dep|e-?transfer (received|from|in)|transfer from|refund|reversal|interest paid|interest earned|cashback|cash back|rebate|credit\b|payment.*thank|thank you.*payment|gst|hst credit|ccb|canada child|ei benefit|cerb|tax refund/i;
+  function parseStatementText(text) {
+    const year = statementYear(text), lines = String(text || "").split(/\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+    const out = []; let prevBal = null;
+    for (const line of lines) {
+      if (SKIP_LINE.test(line)) { const t = line.match(MONEY_RX); if (/balance/i.test(line) && t) prevBal = moneyToken(t[t.length - 1]).v; continue; }
+      const ld = lineDate(line, year); if (!ld) continue;
+      const toks = ld.rest.match(MONEY_RX); if (!toks) continue;
+      const first = ld.rest.indexOf(toks[0]);
+      let desc = ld.rest.slice(0, first).replace(/[|*]+/g, " ").replace(/\s+/g, " ").trim();
+      if (!desc || desc.length < 2) continue;
+      const amt = moneyToken(toks[0]); if (!amt.v) continue;
+      const bal = toks.length >= 2 ? moneyToken(toks[toks.length - 1]).v : null;
+      let sign;
+      if (bal !== null && prevBal !== null && Math.abs(Math.abs(bal - prevBal) - amt.v) < 0.02) sign = bal > prevBal ? 1 : -1;
+      else if (amt.neg) sign = 1; // shown as a credit
+      else sign = MONEY_IN.test(desc) ? 1 : -1;
+      if (bal !== null) prevBal = bal;
+      out.push({ date: ld.date, desc: desc.slice(0, 80), amt: sign * amt.v });
+    }
+    return out;
+  }
+  function bankPrompt(kind) {
+    return (kind === "image" ? "The attached image is a screenshot or photo of a bank or credit card transaction list from Canada." : "Below is the text of a Canadian bank or credit card statement.") +
+      " List every transaction you can read. Reply with only JSON like {\"transactions\":[{\"date\":\"2026-11-03\",\"description\":\"TIM HORTONS #1234\",\"amount\":-4.50}]}." +
+      " amount is negative for money going out (purchases, bills, withdrawals) and positive for money coming in (deposits, paycheques, refunds). date is YYYY-MM-DD; if the year isn't shown, use " + new Date().getFullYear() +
+      ". Skip balances, totals and headings. Never invent transactions. If you can't read any, reply {\"transactions\":[]}.";
+  }
+  function checkAITransactions(ai) {
+    const list = ai && Array.isArray(ai.transactions) ? ai.transactions : [];
+    const latest = toISO(new Date(Date.now() + 3 * 86400000));
+    return list.map((t) => {
+      const date = typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date) && t.date <= latest && t.date > "2000-01-01" ? t.date : null;
+      const amt = +t.amount, desc = typeof t.description === "string" ? t.description.replace(/<[^>]*>/g, "").trim().slice(0, 80) : "";
+      return date && isFinite(amt) && amt !== 0 && Math.abs(amt) < 1e6 && desc ? { date, desc, amt: Math.round(amt * 100) / 100 } : null;
+    }).filter(Boolean);
+  }
+  async function aiStatement(input, image) {
+    const sample = await getSample(); if (!sample) return null;
+    if (image) {
+      const lim = await sample.limits().catch(() => null); if (!lim || !lim.images) return null;
+      const maxB = lim.images.maxInputBytes || 5e6;
+      for (const px of [1600, 1200]) { if (image.size <= maxB) break; image = (await imageToJpeg(image, px)).blob; }
+    }
+    try { return checkAITransactions(await sample.json(image ? bankPrompt("image") : bankPrompt("text") + "\n\n" + input.slice(0, 12000), image ? { images: [image] } : {})); }
+    catch (e) { if (e && e.code === "rate_limited") throw e; return null; }
+  }
+  let importBusy = "";
+  async function importStatement(file) {
+    const name = (file.name || "").toLowerCase(), type = (file.type || "").toLowerCase();
+    const isPdf = type === "application/pdf" || name.endsWith(".pdf"), isImg = type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/.test(name);
+    if (file.size > 25 * 1024 * 1024) return importFail("That file is over 25 MB. Try a smaller PDF or a screenshot.");
+    if (!file.size) return importFail("That file looks empty. Try choosing it again.");
+    importBusy = isPdf ? "Penny is reading your statement..." : "Penny is reading your screenshot..."; render();
+    try {
+      let rows = null, how = "";
+      if (isPdf) {
+        const pdf = await withTimeout(readPdf(file, 20), 45000, "pdf_timeout").catch((e) => { throw new Error(e && /load_failed|pdf_unavailable/.test(e.message) ? "pdf_offline" : "pdf_bad"); });
+        const text = cleanText(pdf.text);
+        rows = parseStatementText(text); how = "pdf";
+        if (rows.length < 2 && text.length > 40) { const ai = await aiStatement(text, null); if (ai && ai.length > rows.length) { rows = ai; how = "ai"; } }
+        if (!rows.length && pdf.image) { const r = await readStatementImage(pdf.image); rows = r.rows; how = r.how; }
+      } else if (isImg) {
+        const r = await readStatementImage(file); rows = r.rows; how = r.how;
+        if (r.error) return importFail(r.error);
+      } else return importFail("Penny can read CSV files, PDF statements and screenshots. That kind of file isn't one of them.");
+      if (!rows || !rows.length) return importFail(isPdf ? "Penny couldn't find any transactions in that PDF. If it's a scanned statement, try a clear screenshot instead, or download the CSV from online banking." : "Penny couldn't read any transactions in that picture. Try a sharper screenshot that shows the dates and amounts.");
+      importBusy = "";
+      pendingImport = { src: how, base: rows, flip: false };
+      Object.assign(pendingImport, buildFromBase(rows, false));
+      render();
+    } catch (e) {
+      const m = e && e.message;
+      importFail(e && e.code === "rate_limited" ? "Penny needs a little break from reading. Try again in a minute." : m === "pdf_offline" ? "Reading PDFs needs internet the first time. Try again when you're online." : m === "pdf_bad" || m === "pdf_timeout" ? "That PDF couldn't be opened. It might be password protected. Try a screenshot or the CSV download instead." : "Something went wrong reading that file. Try a CSV or a screenshot instead.");
+    }
+  }
+  async function readStatementImage(blob) {
+    let jpeg; try { jpeg = await imageToJpeg(blob, 2000); } catch (e) { return { rows: [], error: /heic|heif/i.test(blob.type || "") ? "iPhone HEIC pictures can't be opened here. Take a screenshot instead (screenshots are PNG)." : "That picture couldn't be opened. Try another screenshot." }; }
+    const ai = await aiStatement("", jpeg.blob);
+    if (ai && ai.length) return { rows: ai, how: "ai" };
+    const text = await ocrRead(jpeg.blob).catch(() => null);
+    return { rows: text ? parseStatementText(cleanText(text)) : [], how: "ocr" };
+  }
+  function importFail(msg) { importBusy = ""; pendingImport = null; render(); setTimeout(() => openModal('<div class="ci">' + (pennyOn() ? mascot(110, "P", "comfort") : "") + "<h2>Hmm, that didn't work</h2><p>" + esc(msg) + '</p><div class="row" style="justify-content:center"><button class="btn" data-close>Okay</button></div></div>'), 50); }
+  function statementCat(desc, kind) {
+    let cat = autoCat(desc, kind);
+    if (kind === "expense" && cat === "other") { const g = guessCategory("", desc); if (g.cat !== "other") cat = g.cat; }
+    if (kind === "income" && /refund|return|reversal|cash ?back|rebate|credit|gst|hst|ccb|benefit|tax/i.test(desc) && state.categories.some((c) => c.id === "gov")) cat = "gov";
+    return cat;
+  }
+  const CARD_PAYMENT = /payment.*thank|thank you.*payment|payment received|paiement|autopay(ment)?|pre-?authorized payment/i;
+  function buildFromBase(base, flip) {
+    const have = new Set(state.transactions.map((t) => t.date + "|" + t.desc + "|" + (+t.amount).toFixed(2)));
+    const all = base.map((r) => { const a = flip ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind) }; });
+    const rows = all.filter((r) => !have.has(r.date + "|" + r.desc + "|" + r.amount.toFixed(2)));
+    // paying off a credit card isn't income: start those unticked
+    const skip = {}; rows.forEach((r, i) => { if (r.kind === "income" && CARD_PAYMENT.test(r.desc)) skip[i] = true; });
+    return { rows, dupes: all.length - rows.length, skip };
+  }
+
   /* PAGE: Transactions ----------------------------------------------- */
   let pendingImport = null;
   PAGES.spending = {
@@ -2104,19 +2296,22 @@
     if (pendingImport) {
       const p = pendingImport;
       return '<div class="card-head"><h2>' + icon("upload") + " Check your import</h2></div>" +
-        "<p>Found <b>" + p.rows.length + "</b> transactions" + (p.dupes ? ", skipping <b>" + p.dupes + "</b> you already have" : "") + ". Here are the first few:</p>" +
-        '<div class="table-wrap" style="margin:12px 0"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th></tr></thead><tbody>' +
-        p.rows.slice(0, 8).map((t) => "<tr><td>" + t.date + "</td><td>" + esc(t.desc) + "</td><td>" + esc(catById(t.cat).name) + '</td><td class="r ' + (t.kind === "income" ? "good" : "") + '">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</td></tr>").join("") +
+        "<p>Found <b>" + p.rows.length + "</b> transactions" + (p.dupes ? ", skipping <b>" + p.dupes + "</b> you already have" : "") + ". Untick anything that isn't right" + (p.src !== "csv" ? ", and tap an amount to switch it between money in and money out" : "") + ".</p>" +
+        (p.src === "ai" || p.src === "ocr" ? '<div class="callout gold small">' + icon("info") + "<div>Penny read these from a picture, so please double check the dates and amounts.</div></div>" : p.src === "pdf" ? '<div class="callout small">' + icon("info") + "<div>Read from your PDF statement. Quick check before importing!</div></div>" : "") +
+        '<div class="table-wrap import-table" style="margin:12px 0"><table><thead><tr><th></th><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th></tr></thead><tbody>' +
+        (p.rows.some((t, i) => (p.skip || {})[i] && CARD_PAYMENT.test(t.desc)) ? '<p class="tiny muted">💳 Credit card payments start unticked: paying off your card isn\'t new money, it\'s already counted when you spent it.</p>' : "") +
+        p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + "</td><td>" + esc(catById(t.cat).name) + '</td><td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
         "</tbody></table></div>" +
         '<div class="callout">' + icon("info") + "<div>Spending should show as minus and paycheques as plus. If it's backwards (common with credit card files), press Flip.</div></div>" +
-        '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + p.rows.length + '</button><button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + ' Flip plus/minus</button><button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
+        '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + (p.rows.length - Object.values(p.skip || {}).filter(Boolean).length) + '</button><button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + ' Flip plus/minus</button><button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
     }
     return '<div class="card-head"><h2>' + icon("upload") + " Import from your bank</h2></div>" +
-      '<div class="grid g2"><div class="stack small"><p>Download a <b>CSV</b> file from online banking, then pick it here. Nothing leaves your computer.</p>' +
+      (importBusy ? '<div class="ci">' + (pennyOn() ? mascot(100, "P", "reading") : "") + "<h3>" + esc(importBusy) + '</h3><div class="dots-loading"><span></span><span></span><span></span></div><p class="small muted">Long statements can take a few seconds.</p></div>' :
+      '<div class="grid g2"><div class="stack small"><p>Pick a <b>CSV</b> or <b>PDF statement</b> from online banking, or a <b>screenshot</b> of your transactions from your banking app. You check everything before it\'s saved.</p>' +
       "<ul><li><b>RBC:</b> Account, Download, choose CSV (Comma Separated Values).</li><li><b>TD:</b> Account activity, Download, choose Spreadsheet (.csv).</li><li><b>Scotiabank, BMO, CIBC:</b> Account details, Download transactions, CSV.</li><li><b>Tangerine, EQ, Wealthsimple, Simplii:</b> look for Export or Download, CSV.</li></ul>" +
       '<p class="muted">Most files from Canadian banks work. The app sorts them using your auto-sort rules.</p></div>' +
-      '<label class="drop" style="cursor:pointer;display:grid;place-items:center;gap:8px">' + icon("upload") + "<b>Choose a CSV file</b><span class=\"small\">Tap to browse</span>" +
-      '<input type="file" accept=".csv,text/csv" data-change="importFile" hidden></label></div>';
+      '<label class="drop" style="cursor:pointer;display:grid;place-items:center;gap:8px">' + icon("upload") + "<b>Choose a CSV, PDF or screenshot</b><span class=\"small\">Tap to browse your files or photos</span>" +
+      '<input type="file" accept=".csv,text/csv,.pdf,application/pdf,image/*" data-change="importFile" hidden></label></div>');
   }
 
   /* PAGE: Budgets ----------------------------------------------------- */
@@ -2168,12 +2363,12 @@
         '<div class="grid g4">' + stat("repeat", "#9d94ea", "Per month", money(mo), active.length + " active") + stat("calendar", "#7aa6d9", "Per year", money(mo * 12), "if nothing changes") +
         stat("scissors", "#5fae7c", "Saved by cancelling", money(savedYr), "per year") + stat("clock", "#e3b45f", "Next charge", active.length ? dayLabel(active.map(nextCharge).sort((a, b) => a - b)[0]) : "None", "") + "</div>" +
         (found.length ? '<div class="card"><div class="card-head"><h2>' + icon("search") + ' Found in your transactions</h2><span class="small muted">These repeat every month</span></div><div class="list">' +
-          found.map((f, i) => '<div class="item">' + bubble("repeat", "#9d94ea") + '<div class="grow"><div class="t">' + esc(f.name) + '</div><div class="tiny muted">About ' + money2(f.amount) + ' a month</div></div><button class="btn soft sm" data-act="addFound" data-i="' + i + '">' + icon("plus") + " Track it</button></div>").join("") + "</div></div>" : "") +
+          found.map((f, i) => '<div class="item">' + bubble("repeat", "#9d94ea") + '<div class="grow"><div class="t">' + esc(f.name) + '</div><div class="tiny muted">About ' + money2(f.amount) + " a month · " + esc(f.why) + '</div></div><button class="btn soft sm" data-act="addFound" data-i="' + i + '">' + icon("plus") + " Track it</button></div>").join("") + "</div></div>" : "") +
         '<div class="card"><div class="card-head"><h2>' + icon("list-checks") + " Your bills</h2></div>" +
         (list.length ? '<div class="list">' + list.map((s) => {
           const d = nextCharge(s), days = daysBetween(today(), d), st = SUB_STATUS[s.status] || SUB_STATUS.keep;
           return '<div class="item"' + (s.status === "cancelled" ? ' style="opacity:.6"' : "") + ">" + bubble(s.icon || "repeat", s.status === "cancelled" ? "#a3abbd" : "#9d94ea") +
-            '<div class="grow"><div class="t">' + esc(s.name) + exTag(s) + '</div><div class="tiny muted">' + (s.status === "cancelled" ? "Cancelled. Saving " + money(monthlyCost(s) * 12) + " a year" : (CYCLES[s.cycle] || CYCLES.monthly)[0] + " · next " + dayLabel(d) + (days <= 7 ? " (" + (days === 0 ? "today" : "in " + days + " days") + ")" : "")) + "</div></div>" +
+            '<div class="grow"><div class="t">' + esc(s.name) + exTag(s) + '</div><div class="tiny muted">' + (s.status === "cancelled" ? "Cancelled. Saving " + money(monthlyCost(s) * 12) + " a year" : (paidThisCycle(s) ? '<span class="good">✅ Paid ' + esc(dayLabel(parseISO(s.lastPaid))) + "</span> · next " + dayLabel(d) : (CYCLES[s.cycle] || CYCLES.monthly)[0] + " · next " + dayLabel(d) + (days <= 7 ? " (" + (days === 0 ? "today" : "in " + days + " days") + ")" : "")) + (s.priceWas ? ' · <span class="warn">was ' + money2(s.priceWas) + "</span>" : "")) + "</div></div>" +
             '<span class="amt">' + money2(s.amount) + "</span>" +
             '<select data-change="subStatus" data-id="' + s.id + '" aria-label="Status">' + Object.entries(SUB_STATUS).map(([k, v]) => '<option value="' + k + '"' + (s.status === k ? " selected" : "") + ">" + v[0] + "</option>").join("") + "</select>" +
             '<button class="iconbtn" data-act="editSub" data-id="' + s.id + '" title="Edit">' + icon("pencil") + '</button><button class="iconbtn del" data-act="delSub" data-id="' + s.id + '" title="Delete">' + icon("trash-2") + "</button></div>";
@@ -2722,13 +2917,17 @@
     editTx(el) { txModal(state.transactions.find((t) => t.id === el.dataset.id)); },
     delTx(el) { state.transactions = state.transactions.filter((t) => t.id !== el.dataset.id); commit("Deleted"); },
     toggleImport() { const b = $("#importBox"); if (b) b.hidden = !b.hidden; },
-    flipImport() { pendingImport.flip = !pendingImport.flip; pendingImport.rows = buildImport(pendingImport.raw, pendingImport.flip).rows; render(); },
+    flipImport() { const p = pendingImport; p.flip = !p.flip; p.skip = {}; Object.assign(p, p.base ? buildFromBase(p.base, p.flip) : buildImport(p.raw, p.flip)); render(); },
+    flipRow(el) { const r = pendingImport && pendingImport.rows[+el.dataset.i]; if (!r) return; r.kind = r.kind === "income" ? "expense" : "income"; r.cat = statementCat(r.desc, r.kind); render(); },
     cancelImport() { pendingImport = null; render(); },
     doImport() {
-      const rows = pendingImport.rows.map((r) => Object.assign({ id: uid(), added: todayISO(), src: "import" }, r));
+      const skip = pendingImport.skip || {};
+      const rows = pendingImport.rows.filter((r, i) => !skip[i]).map((r) => Object.assign({ id: uid(), added: todayISO(), src: "import" }, r));
       state.transactions.push(...rows); state.flags.imported = true; state.flags.importOn = todayISO();
       if (rows.length) state.ui.month = rows.map((r) => r.date).sort().pop().slice(0, 7);
+      const paid = markBillsPaid(rows);
       pendingImport = null; award(Math.min(100, rows.length * 2), "Imported " + rows.length + " transactions"); commit();
+      setTimeout(() => billCheckModal(paid), 2600);
     },
     delRule(el) { state.rules.splice(+el.dataset.i, 1); commit("Rule removed"); },
     editCat(el) { catModal(el.dataset.id ? state.categories.find((c) => c.id === el.dataset.id) : null, el.dataset.group); },
@@ -2743,7 +2942,13 @@
     pickTheme(el) { const f = el.closest("form"); f.theme.value = el.dataset.v; $$(".swatches button", f).forEach((b) => b.classList.toggle("on", b === el)); },
     editSub(el) { subModal(el.dataset.id ? state.subs.find((s) => s.id === el.dataset.id) : null); },
     delSub(el) { state.subs = state.subs.filter((s) => s.id !== el.dataset.id); commit("Removed"); },
-    addFound(el) { const f = detectSubs()[+el.dataset.i]; if (f) subModal({ name: f.name, amount: f.amount, cycle: "monthly", next: f.next, icon: "repeat" }); },
+    addFound(el) { const f = detectSubs()[+el.dataset.i]; if (f) subModal({ name: f.name, amount: f.amount, cycle: "monthly", next: f.next, icon: "repeat", cat: billCat({ name: f.name, cat: f.cat }) }); },
+    addFoundAll() {
+      const found = window.__found || [], picks = [...document.querySelectorAll('.overlay input[name="found"]:checked')].map((x) => found[+x.value]).filter(Boolean);
+      for (const f of picks) state.subs.push({ id: uid(), name: f.name, amount: f.amount, cycle: "monthly", next: f.next, icon: "repeat", status: "keep", reviewed: todayISO(), cat: billCat({ name: f.name, cat: f.cat }), lastPaid: f.lastPaid });
+      closeModal(); commit();
+      if (picks.length) setTimeout(() => celebrate("track", { pose: "proud", emoji: "📺", title: picks.length + (picks.length === 1 ? " bill" : " bills") + " added!", sub: "Penny will remind you before each one is charged, and they're in your budget now." }), 150);
+    },
     copy(el) {
       const box = $(el.dataset.target); if (!box) return;
       const done = () => toast(icon("check") + " Copied");
@@ -2850,6 +3055,7 @@
       if (d.id) { const old = state.transactions.find((x) => x.id === d.id); if (old.cat !== t.cat) t.recatOn = todayISO(); Object.assign(old, t, { example: false }); }
       else {
         state.transactions.push(Object.assign({ id: uid(), added: todayISO() }, t)); award(C.xp.logTransaction, "Oink! Logged it");
+        const paidNow = markBillsPaid([t]); if (paidNow.length) setTimeout(() => toast("✅ " + esc(paidNow[0].sb.name) + " marked as paid. Next one " + esc(dayLabel(nextCharge(paidNow[0].sb)))), 1200);
         const realCount = state.transactions.filter((x) => !x.example).length, grp = catById(t.cat).group;
         setTimeout(() => {
           if (grp === "save") celebrate("save", { sub: money2(amount) + " moved to " + catById(t.cat).name + ". Future you says thanks!" });
@@ -2914,6 +3120,7 @@
      Dropdowns, checkboxes and file inputs
      ================================================================== */
   const CHG = {
+    importSkip(el) { const p = pendingImport; if (!p) return; p.skip = p.skip || {}; p.skip[+el.dataset.i] = !el.checked; const n = p.rows.length - Object.values(p.skip).filter(Boolean).length; const b = $('[data-act="doImport"]'); if (b) b.lastChild.textContent = " Import " + n; },
     receiptFile(el) { const f = el.files && el.files[0]; el.value = ""; handleReceiptFile(f); },
     mascotStyle(el) { state.ui.mascot = el.value; save(); render(); burst(["💖", "✨", "🐷"], 8, 0.6); toast("🐷 " + esc(C.mascotName || "Penny") + " loves the new look!"); },
     wzGoal(el) { const t = C.goalTemplates[+el.value], box = $('#wzForm input[name="goalTarget"]'); if (box && t && t.target && !box.value) box.value = t.target; },
@@ -2935,13 +3142,15 @@
       else commit();
     },
     importFile(el) {
-      const file = el.files && el.files[0]; if (!file) return;
+      const file = el.files && el.files[0]; if (!file) return; el.value = "";
+      const nm = (file.name || "").toLowerCase();
+      if (!/\.(csv|txt)$/.test(nm) && !/csv|text\/plain/.test(file.type || "")) return importStatement(file);
       const fr = new FileReader();
       fr.onload = () => {
         const raw = parseCSV(String(fr.result));
         const built = buildImport(raw, false);
         if (!built.rows.length && !built.dupes) { toast("Couldn't find transactions in that file. Make sure it's a CSV from your bank."); return; }
-        pendingImport = { raw, flip: false, rows: built.rows, dupes: built.dupes }; render();
+        pendingImport = { src: "csv", raw, flip: false, rows: built.rows, dupes: built.dupes }; render();
       };
       fr.readAsText(file);
     },

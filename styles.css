@@ -859,3 +859,11 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .ask-card h3 { margin: 0 0 4px; }
 .chip-link { text-decoration: none; color: inherit; font-weight: 700; }
 @media (max-width: 560px) { .ask-card { align-items: flex-start; } .ask-card .mascot-img { width: 80px !important; height: 80px !important; } .ask-card .mascot-img img { width: 80px; height: 80px; } }
+
+/* Import review */
+.import-table { max-height: 420px; overflow: auto; }
+.import-table tr.skipped td { opacity: .45; text-decoration: line-through; }
+.import-table tr.skipped td:first-child { text-decoration: none; opacity: 1; }
+.amt-flip { all: unset; cursor: pointer; font-weight: 700; padding: 2px 6px; border-radius: 8px; white-space: nowrap; }
+.amt-flip:hover, .amt-flip:focus-visible { background: var(--surface-2); outline: 1px dashed var(--line); }
+.found-item { cursor: pointer; } .found-item input { flex: none; width: 18px; height: 18px; }

@@ -24,7 +24,7 @@ Double click `index.html`. It opens in your browser and works offline. Fonts nee
 1. **New here?** The app greets you with a 10-step setup (about 3 minutes). Skip anything you like. Already looking at example data? Press **Set up my profile**.
 2. **Taxes:** type your salary and the tax taken off each paycheque. You'll see your refund estimate right away.
 3. **Budgets:** set a number for each category. The 50/30/20 check tells you if the plan fits your take-home pay.
-4. **Transactions:** press **Import from bank** and pick a CSV from RBC, TD, Scotiabank, BMO, CIBC, Tangerine or most others. Or press **+ Add** for each one.
+4. **Transactions:** press **Import from bank** and pick a CSV or PDF statement from RBC, TD, Scotiabank, BMO, CIBC, Tangerine or most others, or a screenshot of your transactions from your banking app. You tick or untick each one before it's saved. Penny then spots charges that repeat every month, offers to add them to Bills, and marks bills as paid when they show up. Or press **+ Add** for each one.
    **Got a receipt?** Press **Scan a receipt**. Take a photo, choose a photo or PDF bill, or paste the text of an emailed receipt (Uber Eats, Rogers, Amazon...). Penny fills in the total, date and store, guesses the category and says why. Nothing is saved until you press Save, so you can fix anything first. Tick "This is a monthly bill" to add it to Bills too.
 5. **Bills & subs:** add Netflix, your phone, the gym. The app also spots repeating charges in your transactions.
 6. **Goals:** make one for a trip, a first home, an emergency fund. Tap the camera on the card to add your own photo.
