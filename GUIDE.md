@@ -212,6 +212,8 @@ grant select, insert, update, delete on public.penny_data to authenticated;
 revoke all on public.penny_data from anon;
 ```
 
+If sync still says "permission denied", run the fix-it script in the section below.
+
 (The two `grant` lines matter on newer Supabase projects, which don't give signed-in users access to new tables automatically. Without them, sync says "permission denied for table penny_data".)
 
 3. Open **Authentication**, then **Sign In / Providers**, then **Email**. Turn **Confirm email** off (so people can sign in right away) and save.

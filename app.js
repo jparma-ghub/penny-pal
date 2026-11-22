@@ -1789,7 +1789,7 @@
       if (manual) toast(icon("check") + " All synced");
     } catch (e) {
       syncState = e.message === "signed_out" ? "idle" : e.message === "wrong_key" || e.message === "need_key" ? "needkey" : "error";
-      syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : /permission denied|42501|row-level security/i.test(e.message + " " + (e.code || "")) ? "Sync isn't fully switched on at the server yet (database permissions). Your data is safe on this device and will sync once it's fixed." : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
+      syncNote = e.message === "signed_out" ? syncNote : e.message === "wrong_key" ? "Penny couldn't unlock your saved data with this password. Enter the password you used when you made the account." : e.message === "need_key" ? "" : /permission denied|42501|row-level security/i.test(e.message + " " + (e.code || "")) ? "Sync isn't fully switched on at the server yet (database permissions). Your data is safe on this device and will sync once it's fixed. (Details for the app owner: " + String(e.message).slice(0, 140) + ")" : e.message === "timeout" || e instanceof TypeError ? "Couldn't reach the sync server. Your changes are safe here and will sync later." : "Sync hiccup: " + e.message;
       if (manual) toast(esc(syncNote || "Couldn't sync right now"));
     } finally { syncBusy = false; if (pageId() === "mydata") render(); }
   }
