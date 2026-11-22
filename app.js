@@ -3458,7 +3458,7 @@
       fr.onload = () => {
         try {
           const s = JSON.parse(String(fr.result)); if (!s || !Array.isArray(s.transactions) || !s.profile) throw new Error("bad");
-          state = normalize(s); applyTheme(); save(); render(); toast(icon("check") + " Backup restored");
+          state = normalize(s); applyTheme(); evaluate(); save(); render(); toast(icon("check") + " Backup restored");
         } catch (e) { toast("That file isn't a Penny Pal backup."); }
       };
       fr.readAsText(file);
