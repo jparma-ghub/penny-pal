@@ -924,3 +924,40 @@ body { background: var(--bg) radial-gradient(circle at 8% 0%, var(--pink) 0, tra
 .import-table tr.is-dupe td { background: color-mix(in srgb, #f5c86b 12%, transparent); }
 :root[data-theme="dark"] .dupe-note { color: #f2c46b; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dupe-note { color: #f2c46b; } }
+
+/* Penny noticed (Home) */
+.notes-card .note-row { align-items: flex-start; }
+.notes-card .note-row p { margin: 0 0 6px; line-height: 1.45; }
+.notes-card .note-actions { gap: 14px; }
+.callout.good { background: color-mix(in srgb, var(--good) 12%, transparent); } .callout.good .ic { color: var(--good); }
+
+/* Reports */
+.rep-table td.r, .rep-table th.r { text-align: right; white-space: nowrap; }
+.rep-table tr.tot td { font-weight: 700; border-top: 1.5px solid var(--line); }
+.field.inline { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.field.inline select { width: auto; }
+
+/* Split a purchase */
+.split-row { display: flex; gap: 8px; align-items: center; }
+.split-row select { flex: 1 1 auto; min-width: 0; }
+.split-row .money-in { width: 130px; flex: 0 0 auto; }
+
+/* Which account each imported file is from */
+.link-box { margin-top: 12px; padding: 14px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.link-box h3 { margin: 0; display: flex; gap: 6px; align-items: center; font-size: 1rem; }
+.link-box .src-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.link-box .src-row select { width: auto; max-width: 100%; }
+
+/* Small labels */
+.auto-tag { color: var(--good); font-weight: 600; }
+.roll-note { margin-top: 2px; }
+.cash-cover { margin: 0 0 12px; }
+.trash-list .item { gap: 10px; }
+@media (max-width: 560px) {
+  .split-row .money-in { width: 110px; }
+  .page-head .field.inline { width: 100%; }
+}
+
+/* Undo and links inside a toast can be tapped (the rest lets taps through) */
+.toast button, .toast a { pointer-events: auto; }
+.toast .linklike { font-weight: 700; text-decoration: underline; margin-left: 4px; }

@@ -30,10 +30,11 @@ window.CONFIG = {
   appName: "Penny Pal",
   // Bump this when you change the app, and REPLACE whatsNew with only that update's changes.
   // People who already use the app see a "What's new" popup once. Keep it short.
-  version: "5.1",
+  version: "5.2",
   whatsNew: [
-    "📱 Screenshots read much better: Penny now uses the thin gray lines between transactions, so a long name on two lines stays one transaction",
-    "🖼️ Upload a few overlapping screenshots at once. Rows that show up in more than one are flagged as duplicates",
+    "📊 New Snout Reports page: month by month, this year vs last year, and a trend for any category",
+    "✂️ Split one purchase across categories, 🔁 roll over unspent budget, and 🗑️ Undo or put back anything you delete",
+    "🔄 Account balances can update themselves from linked transactions, and store returns now lower that budget instead of counting as income",
   ],
   locale: "en-CA",
   currency: "CAD",
@@ -60,6 +61,7 @@ window.CONFIG = {
     budgets: ["Budget Trough", "Budgets", "Give every dollar a job (and a snack). Change any amount and it saves right away."],
     bills: ["Bills", "& subscriptions", "The sneaky charges that come back every month. Find the ones you forgot about and give them the boot. 👢"],
     goals: ["Hog Goals", "Savings goals", "Trips, a first home, a safety net. Feed your goals a little at a time and watch them grow."],
+    reports: ["Snout Reports", "Reports", "Month by month, year over year and category by category. Sniff out where your money really goes. 🔍"],
     networth: ["The Pig Picture", "Net worth", "What you own minus what you owe. Step back and see the pig picture. 🖼️"],
     taxes: ["Oinktario Taxes", "Taxes", "See your refund before you file, and how much your RRSP and FHSA save you. Way less boar-ing than it sounds."],
     retirement: ["Retirement", "", "If I put money in my RRSP or TFSA now, how much will I have later? Future you, lounging in clover. 🍀"],
@@ -151,6 +153,7 @@ window.CONFIG = {
     spending: { say: "Every penny in and out lives here!", points: ["💸 All your purchases and paycheques in one list", "📸 Scan a receipt, import your bank file or add one by hand", "🏷️ Fix a category in the list and I'll remember it"] },
     budgets: { say: "Let's give every dollar a job!", points: ["👛 Pick a monthly amount for each category", "📊 Bars fill up as you spend. Green means great", "⚖️ The 50/30/20 check shows if your plan fits your pay"] },
     bills: { say: "Let's catch the sneaky repeat charges!", points: ["📺 Everything that charges you again and again", "🔍 I spot repeat charges in your transactions for you", "👢 Mark ones to cancel and see your yearly savings"] },
+    reports: { say: "Let's sniff out the trends!", points: ["📅 Every month of the year: money in, spent, saved", "↕️ This month vs last month, and this year vs last year", "📈 Pick a category and see its last 12 months"] },
     goals: { say: "What are we saving up for?", points: ["🎯 A pot for anything: a trip, a home, a safety net", "📅 See how much to save each month to get there", "📷 Add your own photo to keep you excited"] },
     networth: { say: "Here's the pig picture of your money!", points: ["⚖️ What you own minus what you owe", "🏦 Add your accounts and debts about once a month", "📈 Watch it grow, and track your credit score"] },
     taxes: { say: "Taxes, but way less scary. Promise!", points: ["🍁 Federal and Ontario tax for this year", "💰 Add your salary and pay stub to guess your refund", "🧾 See how much an RRSP or FHSA deposit saves you"] },
@@ -341,6 +344,8 @@ window.CONFIG = {
     { id: "pay", name: "Paycheque", icon: "briefcase", color: "#5fae7c", group: "income", budget: 0 },
     { id: "side", name: "Side hustle", icon: "sparkles", color: "#e3b45f", group: "income", budget: 0 },
     { id: "gov", name: "Refunds & benefits", icon: "landmark", color: "#7aa6d9", group: "income", budget: 0 },
+    // offset: money back from a store lowers the spending it came from instead of counting as income
+    { id: "returns", name: "Returns", icon: "rotate-ccw", color: "#c9a58c", group: "income", offset: true, budget: 0 },
     // offset: true = not income. It lowers your spending instead (a friend paying back their share)
     { id: "payback", name: "Friends paying me back", icon: "hand-coins", color: "#e3b45f", group: "income", offset: true, budget: 0 },
     // group "transfer" = moving your own money between accounts. Not spending, not income

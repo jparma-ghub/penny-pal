@@ -32,7 +32,7 @@
   const f2 = new Intl.NumberFormat(C.locale, { style: "currency", currency: C.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const money = (n) => f0.format(Math.round(n || 0)).replace("CA", "");
   const money2 = (n) => f2.format(n || 0).replace("CA", "");
-  const short$ = (n) => { const a = Math.abs(n), s = n < 0 ? "-" : ""; return a >= 1e6 ? s + "$" + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : a >= 1000 ? s + "$" + Math.round(a / 1000) + "k" : s + "$" + Math.round(a); };
+  const short$ = (n) => { const a = Math.abs(n), s = n < 0 ? "-" : ""; return a >= 1e6 ? s + "$" + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : a >= 1000 ? s + "$" + (a < 10000 && Math.round(a / 100) % 10 ? (a / 1000).toFixed(1).replace(/\.0$/, "") : Math.round(a / 1000)) + "k" : s + "$" + Math.round(a); };
   const pct = (n, d = 1) => (Math.round(n * 100 * 10 ** d) / 10 ** d) + "%";
   const pad = (n) => String(n).padStart(2, "0");
   const toISO = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -233,6 +233,25 @@
       else if (t.kind === "income" && (t.cat === "pay" || t.cat === "other") && ETRANSFER_IN.test(d) && !/PAYROLL|SALARY|DIRECT DEP/i.test(d)) t.cat = "payback";
     });
   }
+  // Store returns that were saved as "Refunds & benefits" before Returns existed: move them so they lower spending
+  const GOV_RX = /\b(CRA|CANADA|GOVT|GOVERNMENT|GST|HST|CCB|TRILLIUM|CARBON|CLIMATE|OAS|CPP|EI|AE|RECEIVER GENERAL|TAX)\b/i, STORE_BACK_RX = /REFUND|RETURN|REVERSAL|REBATE|CHARGEBACK|PRICE ADJ/i;
+  function returnsPass() {
+    if (!state || state.isExample || state.flags.returnsPass) return;
+    if (!state.categories.some((c) => c.id === "returns")) return;
+    state.flags.returnsPass = true;
+    for (const t of state.transactions) {
+      const d = String(t.desc || "");
+      if (t.kind !== "income" || t.cat !== "gov" || t.recatOn || t.example || GOV_RX.test(d) || /CASH ?BACK|INTEREST/i.test(d)) continue;
+      if (STORE_BACK_RX.test(d) || guessFrom(d)) t.cat = "returns";
+    }
+  }
+  // which spending category a return most likely came back to (Amazon goes to Shopping)
+  function guessFrom(desc) {
+    const clean = String(desc || "").replace(/\b(REFUND|RETURN|REVERSAL|REBATE|CREDIT|CASH ?BACK|CHARGEBACK|PRICE ADJUSTMENT)\b/gi, " ");
+    const g = explainCat(clean, "expense");
+    if (g && g.cat && !["other", "transfer", "payback", "travel"].includes(g.cat) && catById(g.cat).group !== "income" && catById(g.cat).group !== "save") return g.cat;
+    return /AMZN|AMAZON|WALMART|COSTCO|BEST BUY|WINNERS|MARSHALLS|HOMESENSE|IKEA|INDIGO|UNIQLO|ZARA|H&M|SEPHORA/i.test(desc) && state.categories.some((c) => c.id === "shopping") ? "shopping" : null;
+  }
   function travelPass(s) {
     if (!s || s.isExample || (s.flags && s.flags.travelPass)) return;
     if (!(s.categories || []).some((c) => c.id === "travel")) return;
@@ -430,7 +449,65 @@
       setTimeout(() => celebrate("step", fresh.length === 1 ? { emoji: fresh[0].emoji, title: "Step complete!", sub: fresh[0].title } : { title: "You've already done " + fresh.length + " steps!", sub: "Look at you. Way ahead of the game." }), 250);
     }
   }
+  // each return remembers which category it came back to, so it lowers that budget
+  function fillReturnsFrom() {
+    for (const t of state.transactions) {
+      if (t.cat === "returns") { if (t.from === undefined) t.from = guessFrom(t.desc) || null; }
+      else if (t.from !== undefined) delete t.from;
+    }
+  }
+  /* Accounts set to auto-update: the balance you typed (or the statement balance) plus
+     every linked transaction after that date. Money in raises a bank balance and lowers
+     what you owe on a card; money out does the opposite. */
+  function trackBalances() {
+    for (const a of state.accounts) {
+      if (!a.track || a.example) continue;
+      if (a.baseBal === undefined) { a.baseBal = +a.balance || 0; a.baseDate = todayISO(); a.baseAt = Date.now(); }
+      const debt = acctType(a.type).kind === "debt", from = a.baseDate || "0000", at = a.baseAt || 0;
+      let delta = 0;
+      // after the day the balance was set, or the same day but linked after you set it (your morning coffee)
+      for (const t of state.transactions) if (t.acct === a.id && (t.date > from || (t.date === from && (t.linkAt || 0) > at))) delta += (t.kind === "income" ? 1 : -1) * +t.amount;
+      const bal = Math.round(((+a.baseBal || 0) + (debt ? -delta : delta)) * 100) / 100;
+      if (bal !== +a.balance) { a.balance = debt ? Math.max(0, bal) : bal; a.updated = todayISO(); }
+    }
+  }
+  const acctName = (id) => { const a = id && state.accounts.find((x) => x.id === id); return a ? a.name : ""; };
+  // Cash you can reach quickly, and how many months of spending it covers
+  function cashPosition() {
+    const real = state.accounts.filter((a) => !a.example || state.isExample);
+    const cash = real.filter((a) => a.type === "chequing" || a.type === "savings").reduce((a, x) => a + num(x.balance), 0);
+    const recent = [1, 2, 3].map((i) => monthStats(shiftMonth(thisMonth(), -i)).spent).filter((v) => v > 0);
+    const avg = recent.length ? recent.reduce((a, v) => a + v, 0) / recent.length : 0;
+    const monthly = Math.max(efPlan().monthly || 0, avg); // a buffer has to cover what you really spend
+    return { cash, monthly, months: monthly > 0 ? cash / monthly : 0, target: 3 };
+  }
+  // Trash: deleted things wait 30 days so they can be put back
+  const TRASH_DAYS = 30;
+  function toTrash(kind, items) {
+    state.trash = state.trash || [];
+    const at = todayISO();
+    for (const item of [].concat(items)) if (item && !item.example) state.trash.unshift({ id: kind + ":" + (item.id || uid()), kind, item, at });
+  }
+  function purgeTrash() {
+    if (!state.trash || !state.trash.length) return;
+    const cut = today(); cut.setDate(cut.getDate() - TRASH_DAYS); const cutoff = toISO(cut);
+    const keep = state.trash.filter((x) => x && x.item && x.at >= cutoff);
+    if (keep.length !== state.trash.length) state.trash = keep;
+  }
+  // Rollover budgets: unspent money (or overspending) carries into the next month,
+  // counting from the month rollover was turned on (up to 24 months back)
+  let carryMemo = {};
+  function catCarry(c, ym) {
+    if (!c.rollover || c.group === "income" || c.group === "transfer" || c.group === "save") return 0;
+    const from = c.rolloverFrom || ym; let carry = 0, k = from, n = 0;
+    while (k < ym && n < 24) {
+      const ms = carryMemo[k] || (carryMemo[k] = monthStats(k));
+      carry += (+c.budget || 0) - (ms.byCat[c.id] || 0); k = shiftMonth(k, 1); n++;
+    }
+    return Math.round(carry);
+  }
   function evaluate() {
+    if (state && !state.isExample) { returnsPass(); fillReturnsFrom(); trackBalances(); purgeTrash(); }
     const p = state.profile;
     if (!state.isExample) coverBills();
     try { evalFeed(); } catch (e) { /* never let Penny's belly break the app */ }
@@ -456,11 +533,11 @@
   function monthStats(ym) {
     const tx = state.transactions.filter((t) => t.date.startsWith(ym));
     const byCat = {};
-    let income = 0, spent = 0, savedTx = 0, paidBack = 0, moved = 0;
+    let income = 0, spent = 0, savedTx = 0, paidBack = 0, moved = 0; const backTo = {};
     for (const t of tx) {
       const c = catById(t.cat);
       if (c.group === "transfer") { moved += +t.amount; continue; }      // your own money moving: not spending, not income
-      if (t.kind === "income" && c.offset) { paidBack += +t.amount; continue; } // a friend paying you back: lowers spending
+      if (t.kind === "income" && c.offset) { paidBack += +t.amount; if (t.from) backTo[t.from] = (backTo[t.from] || 0) + +t.amount; continue; } // a friend paying you back or a store return: lowers spending
       if (t.kind === "income") { income += +t.amount; continue; }
       byCat[c.id] = (byCat[c.id] || 0) + +t.amount;
       if (c.group === "save") savedTx += +t.amount; else spent += +t.amount;
@@ -468,6 +545,8 @@
     let goalIn = 0;
     for (const g of state.goals) for (const h of g.history || []) if (h.date.startsWith(ym)) goalIn += +h.amount;
     spent = Math.max(0, spent - paidBack);
+    // a return comes off the category it was bought in (Winners return lowers Shopping)
+    for (const [k, v] of Object.entries(backTo)) if (byCat[k] !== undefined) byCat[k] = Math.max(0, byCat[k] - v);
     return { tx, byCat, income, spent, saved: savedTx + goalIn, savedTx, goalIn, paidBack, moved };
   }
   // Which budget category a bill belongs to (phone bills to Phone & internet, gym to Health and so on)
@@ -943,7 +1022,7 @@
   function toast(html) {
     const box = $("#toasts"); if (!box) return;
     const el = document.createElement("div"); el.className = "toast"; el.innerHTML = (state && pennyOn() ? mascot(30, "P", "happy") : "") + "<span>" + html + "</span>"; box.appendChild(el);
-    setTimeout(() => el.remove(), 3200);
+    setTimeout(() => el.remove(), /data-act|href=/.test(html) ? 6500 : 3200); // give time to tap Undo
     while (box.children.length > 4) box.firstChild.remove();
   }
   let modalEl = null;
@@ -1041,8 +1120,8 @@
   const askCard = (pose, title, text, btn) => '<div class="card ask-card">' + (pennyOn() ? mascot(110, "P", pose) : '<div class="ci-emoji">🐷</div>') + '<div><h3>' + esc(title) + '</h3><p class="small muted">' + text + "</p>" + (btn || "") + "</div></div>";
   const monthNav = () => '<div class="row" style="gap:4px"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Previous month">' + icon("chevron-left") + '</button><b style="min-width:138px;text-align:center">' + monthLabel(state.ui.month) + '</b><button class="iconbtn" data-act="month" data-d="1" aria-label="Next month">' + icon("chevron-right") + "</button></div>";
   const exampleNote = () => state.isExample ? '<div class="callout gold example-note"><div class="example-text">' + icon("info") + '<span>You\'re looking at <b>example data</b> 👀 It\'s view only. Ready to make it yours?</span></div><div class="example-btns"><button class="btn gold sm" data-act="startSetup">Make it mine ✨</button></div></div>' : "";
-  const PAGE_EMOJI = { path: "🗺️", spending: "🧾", budgets: "👛", bills: "📺", goals: "🎯", networth: "⚖️", taxes: "🍁", retirement: "🌅", house: "🔑", learn: "📚", rewards: "🏆", reminders: "🔔", mydata: "💾" };
-  const PAGE_POSE = { path: "explorer", spending: "thinking", budgets: "coin", bills: "surprised", goals: "jar", networth: "growth", taxes: "taxes", retirement: "retire", house: "home", learn: "reading", rewards: "trophy", reminders: "alarm", mydata: "calm" };
+  const PAGE_EMOJI = { path: "🗺️", spending: "🧾", budgets: "👛", bills: "📺", goals: "🎯", reports: "📊", networth: "⚖️", taxes: "🍁", retirement: "🌅", house: "🔑", learn: "📚", rewards: "🏆", reminders: "🔔", mydata: "💾" };
+  const PAGE_POSE = { path: "explorer", spending: "thinking", budgets: "coin", bills: "surprised", goals: "jar", reports: "reading", networth: "growth", taxes: "taxes", retirement: "retire", house: "home", learn: "reading", rewards: "trophy", reminders: "alarm", mydata: "calm" };
   function showPageIntro(id) {
     const it = C.pageIntros && C.pageIntros[id]; if (!it) return;
     const pn = pageName(id) || [id, "", ""];
@@ -1103,11 +1182,56 @@
   const PAGES = {};
   const NAV = [
     ["home", "Home", "layout-dashboard"], ["path", "Piggy Quests", "route"], ["spending", "Transactions", "receipt"], ["budgets", "Budgets", "wallet"],
-    ["bills", "Bills & subs", "repeat"], ["goals", "Goals", "target"], null,
+    ["bills", "Bills & subs", "repeat"], ["goals", "Goals", "target"], ["reports", "Reports", "trending-up"], null,
     ["networth", "Net worth", "scale"], ["taxes", "Taxes", "landmark"], ["retirement", "Retirement", "sunset"], ["house", "Buy a home", "key-round"], null,
     ["learn", "Learn", "graduation-cap"], ["rewards", "Rewards", "trophy"], ["reminders", "Reminders", "bell"], ["mydata", "My data", "database"]
   ];
 
+  /* Penny's notes: a few nudges worked out from your own numbers, each with a "Not now" */
+  function insights() {
+    if (state.isExample || !state.ui.setupDone) return [];
+    const out = [], P = cashPosition(), m = monthStats(thisMonth()), day = new Date().getDate();
+    const real = state.accounts.filter((a) => !a.example);
+    const highDebt = real.filter((a) => a.type === "cc" || a.type === "loc").reduce((a, x) => a + num(x.balance), 0);
+    const bills30 = state.subs.filter((x) => !x.example && x.status !== "cancelled").reduce((a, x) => a + monthlyCost(x), 0);
+    const extra = Math.floor((P.cash - P.monthly * P.target - bills30) / 100) * 100;
+    if (highDebt > 0 && P.cash > Math.max(1000, P.monthly)) out.push({ id: "debt", tone: "red", icon: "credit-card", link: ["#networth", "See your accounts"],
+      text: "You owe <b>" + money(highDebt) + "</b> on a card or line of credit and have <b>" + money(P.cash) + "</b> in chequing and savings. Card interest is around 20%, which is way more than savings earn, so paying the card down is usually the better deal. Keep a cushion for emergencies and put the rest toward it." });
+    if (P.monthly > 0 && real.length && P.months < P.target) out.push({ id: "buffer", tone: "gold", icon: "umbrella", link: ["#goals", "Open your goals"],
+      text: "Your chequing and savings would cover about <b>" + P.months.toFixed(1) + " months</b> of spending. A good first target is " + P.target + " months, which is about <b>" + money(P.monthly * P.target) + "</b> for you. Small, regular top-ups get you there." });
+    if (extra >= 2000 && !(highDebt > 0)) out.push({ id: "extra-cash", tone: "good", icon: "trending-up", link: ["#retirement", "See how it could grow"],
+      text: "You have about <b>" + money(extra) + "</b> more in chequing and savings than your " + P.target + "-month cushion and bills need. That money could grow in a " + (real.some((a) => a.type === "tfsa") ? "TFSA" : "TFSA (Penny doesn't see one yet)") + ". You can keep part of it in a high-interest savings account inside the TFSA so it's still easy to reach." });
+    const over = state.categories.filter((c) => (c.group === "need" || c.group === "want") && c.budget > 0)
+      .map((c) => ({ c, sp: m.byCat[c.id] || 0, pace: c.budget * Math.min(1, day / 30) })).filter((x) => day >= 8 && x.sp > x.pace * 1.25 && x.sp > 50).sort((a, b) => b.sp / b.c.budget - a.sp / a.c.budget)[0];
+    if (over) out.push({ id: "over-" + over.c.id, tone: "gold", icon: "receipt", link: ["#budgets", "Open the budget"],
+      text: "<b>" + esc(over.c.name) + "</b> is moving fast: " + money(over.sp) + " of " + money(over.c.budget) + " with " + (30 - day > 0 ? (30 - day) + " days to go" : "the month nearly done") + ". No stress, just a heads up." });
+    const last = monthStats(shiftMonth(thisMonth(), -1)), prev = monthStats(shiftMonth(thisMonth(), -2));
+    const jump = state.categories.filter((c) => c.group === "need" || c.group === "want").map((c) => ({ c, a: last.byCat[c.id] || 0, b: prev.byCat[c.id] || 0 })).filter((x) => x.b > 0 && x.a - x.b > 75 && x.a > x.b * 1.3).sort((a, b) => (b.a - b.b) - (a.a - a.b))[0];
+    if (jump) out.push({ id: "jump-" + jump.c.id, tone: "", icon: "trending-up", link: ["#reports", "See your reports"],
+      text: "Last month you spent <b>" + money(jump.a - jump.b) + " more on " + esc(jump.c.name) + "</b> than the month before (" + money(jump.a) + " vs " + money(jump.b) + ")." });
+    if (!real.length) out.push({ id: "accounts", tone: "", icon: "wallet", link: ["#networth", "Add an account"],
+      text: "Add your account balances on The Pig Picture and Penny can tell you if your cash is working hard enough." });
+    const hidden = (state.ui.hideNotes || {})[thisMonth()] || [];
+    return out.filter((x) => !hidden.includes(x.id));
+  }
+  function insightsCard() {
+    const list = insights().slice(0, 3);
+    if (!list.length) return "";
+    return '<div class="card stack notes-card"><div class="card-head"><h2>' + icon("sparkles") + " Penny noticed</h2></div>" +
+      list.map((x) => '<div class="callout ' + x.tone + ' note-row">' + icon(x.icon) + '<div class="grow"><p>' + x.text + "</p>" +
+        '<div class="row note-actions">' + (x.link ? '<a class="small" href="' + x.link[0] + '">' + x.link[1] + "</a>" : "") + '<button class="linklike small muted" data-act="hideNote" data-id="' + x.id + '">Not now</button></div></div></div>').join("") +
+      '<p class="tiny muted">General info from your own numbers, not advice from a licensed advisor.</p></div>';
+  }
+  function trashCard() {
+    const T = (state.trash || []).filter((x) => x && x.item);
+    const label = { transactions: "Transaction", subs: "Bill", goals: "Goal", accounts: "Account", reminders: "Reminder" };
+    return '<div class="card stack trash-card"><h2>' + icon("trash-2") + " Recently deleted</h2>" +
+      (T.length ? '<p class="small muted">Deleted things wait here for ' + TRASH_DAYS + " days, then they're gone for good. Tap Put back to bring one back.</p>" +
+        '<div class="list trash-list">' + T.slice(0, 40).map((x) => '<div class="item"><div class="grow"><div class="t">' + esc(x.item.desc || x.item.name || x.item.text || "Item") + '</div><div class="tiny muted">' + (label[x.kind] || "Item") + (x.item.amount ? " · " + money2(x.item.amount) : "") + " · deleted " + esc(dayLabel(parseISO(x.at))) + '</div></div><button class="btn ghost sm" data-act="restoreTrash" data-id="' + esc(x.id) + '">Put back</button></div>').join("") + "</div>" +
+        (T.length > 40 ? '<p class="tiny muted">And ' + (T.length - 40) + " more.</p>" : "") +
+        '<div class="row"><button class="btn danger sm" data-act="emptyTrash">Empty trash</button></div>'
+        : '<p class="small muted">Nothing deleted in the last ' + TRASH_DAYS + " days. If you delete something by accident, it waits here so you can put it back.</p>") + "</div>";
+  }
   /* PAGE: Home ------------------------------------------------------- */
   PAGES.home = {
     render() {
@@ -1145,7 +1269,7 @@
         tile("briefcase", "#5fae7c", "Money in", money(m.income), "💰") +
         tile("shopping-bag", "#e39bbd", "Spent", money(m.spent), "🛍️") +
         tile("piggy-bank", "#5aa9a2", "Saved", money(m.saved), "🐷") +
-        "</div>" +
+        "</div>" + (isNow ? insightsCard() : "") +
 
         '<div class="grid g2">' +
         '<div class="card"><div class="card-head"><h2>🧾 Where it went</h2><a class="small" href="#spending">See all</a></div>' +
@@ -2787,6 +2911,26 @@
     plan.skippedOlder = skippedOlder;
     return plan;
   }
+  // Which of your accounts each imported file is from: the statement's account if Penny matched one, else a same-bank, same-kind account
+  function guessLinks(p, kinds) {
+    const mine = state.accounts.filter((a) => !a.example);
+    return (p.files || []).map((n, i) => {
+      const b = (p.balances || []).find((x) => x.file === i && x.accountId && x.accountId !== "new");
+      if (b && mine.some((a) => a.id === b.accountId)) return b.accountId;
+      const type = kinds[i] === "card" ? "cc" : kinds[i] === "loc" ? "loc" : kinds[i] === "savings" ? "savings" : kinds[i] ? "chequing" : "";
+      const bank = ((n.match(BANK_NAMES) || [""])[0] || "").toUpperCase();
+      const same = mine.filter((a) => (!type || a.type === type) && bank && a.name.toUpperCase().includes(bank));
+      return same.length === 1 ? same[0].id : "";
+    });
+  }
+  function linkSection(p) {
+    const mine = state.accounts.filter((a) => !a.example);
+    if (!mine.length || !p.files || !p.files.length) return "";
+    return '<div class="card-inner link-box"><h3>' + icon("credit-card") + " Which account " + (p.files.length === 1 ? "is this from?" : "is each file from?") + "</h3>" +
+      '<p class="small muted">Optional. Each transaction will show it, and accounts set to auto-update move with it.</p>' +
+      p.files.map((n, i) => '<div class="src-row"><div class="grow t small"><b>' + esc(n) + '</b></div><select data-change="impAcct" data-i="' + i + '" aria-label="Account for ' + esc(n) + '"><option value="">Not linked</option>' +
+        mine.map((a) => '<option value="' + a.id + '"' + ((p.links || [])[i] === a.id ? " selected" : "") + ">" + esc(a.name) + (a.track ? " (auto-updates)" : "") + "</option>").join("") + "</select></div>").join("") + "</div>";
+  }
   function balanceSection(p) {
     if (!p.balances || !p.balances.length) return "";
     return '<div class="card-inner bal-box"><h3>' + icon("scale") + " Update The Pig Picture?</h3>" +
@@ -2843,14 +2987,14 @@
   async function importFiles(fileList) {
     const files = Array.from(fileList || []).filter(Boolean).slice(0, 30);
     if (!files.length) return;
-    const all = [], errors = [], hows = new Set(), names = [], balances = [];
+    const all = [], errors = [], hows = new Set(), names = [], balances = [], kinds = [];
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       importBusy = files.length > 1 ? "Reading " + (i + 1) + " of " + files.length + ": " + (f.name || "file") : /\.pdf$/i.test(f.name || "") ? "Penny is reading your statement..." : /\.csv$/i.test(f.name || "") ? "Penny is reading your file..." : "Penny is reading your screenshot...";
       render();
       try {
         const r = await readImportFile(f);
-        names.push(f.name || "file " + (i + 1)); hows.add(r.how);
+        names.push(f.name || "file " + (i + 1)); hows.add(r.how); kinds.push(r.kind || "");
         if (r.balance && isFinite(r.balance.amount)) balances.push({ file: names.length - 1, name: f.name || "file", amount: r.balance.amount, date: r.balance.date, kind: r.kind });
         r.rows.forEach((row) => all.push(Object.assign({ file: names.length - 1 }, row)));
       } catch (e) {
@@ -2872,6 +3016,7 @@
       return importFail(errors.length === 1 ? errors[0].name + ": " + errors[0].msg : "Penny couldn't read any of those files. " + errors.map((x) => x.name + ": " + x.msg).join(" "));
     }
     pendingImport = { src: hows.has("ai") || hows.has("ocr") ? "ai" : hows.has("pdf") ? "pdf" : "csv", base: all, files: names, flips: {}, errors, undated, balances: planBalances(balances) };
+    pendingImport.links = guessLinks(pendingImport, kinds);
     Object.assign(pendingImport, buildFromBase(all, {}));
     render();
   }
@@ -2916,9 +3061,10 @@
   function statementCat(desc, kind) {
     let cat = autoCat(desc, kind);
     if (kind === "expense" && cat === "other") { const g = guessCategory("", desc); if (g.cat !== "other") cat = g.cat; }
-    if (kind === "income" && /refund|return|reversal|cash ?back|rebate|credit|gst|hst|ccb|benefit|tax/i.test(desc) && state.categories.some((c) => c.id === "gov")) cat = "gov";
+    const has = (id) => state.categories.some((c) => c.id === id);
+    if (kind === "income" && /refund|return|reversal|cash ?back|rebate|credit|gst|hst|ccb|benefit|tax/i.test(desc) && has("gov")) cat = STORE_BACK_RX.test(desc) && !GOV_RX.test(desc) && has("returns") ? "returns" : "gov";
     // money back from a store (a return on your card) is a refund, not a paycheque
-    if (kind === "income" && (cat === "pay" || cat === "other") && state.categories.some((c) => c.id === "gov") && !/payroll|salary|pay ?cheque|direct dep|deposit/i.test(desc)) { const g = explainCat(desc, "expense"); if (g && g.cat && !["other", "transfer", "payback"].includes(g.cat) && (catById(g.cat).group || "") !== "income") cat = "gov"; }
+    if (kind === "income" && (cat === "pay" || cat === "other") && state.categories.some((c) => c.id === "gov") && !/payroll|salary|pay ?cheque|direct dep|deposit/i.test(desc)) { const g = explainCat(desc, "expense"); if (g && g.cat && !["other", "transfer", "payback"].includes(g.cat) && (catById(g.cat).group || "") !== "income") cat = has("returns") ? "returns" : "gov"; }
     return cat;
   }
   const CARD_PAYMENT = /payment.*thank|thank you.*payment|payment received|paiement|autopay(ment)?|pre-?authorized payment/i;
@@ -2948,12 +3094,16 @@
     const all = base.map((r, bi) => { const a = flips.all || flips[r.file] ? -r.amt : r.amt, kind = a < 0 ? "expense" : "income"; return { date: r.date, desc: r.desc, amount: Math.abs(a), kind, cat: statementCat(r.desc, kind), file: r.file, bi }; });
     // each saved transaction can only "use up" one imported row
     const used = new Set(), accepted = [];
+    // split purchases are one charge on your statement: compare against the whole amount
+    const pool = state.transactions.filter((t) => !t.split), groups = {};
+    state.transactions.forEach((t) => { if (t.split) (groups[t.split] = groups[t.split] || []).push(t); });
+    Object.values(groups).forEach((g) => pool.push(Object.assign({}, g[0], { id: "split:" + g[0].split, amount: Math.round(g.reduce((a, x) => a + +x.amount, 0) * 100) / 100, kind: "expense" })));
     // exact matches first, so a near match can't take a saved transaction that has an exact twin
-    for (const r of all) for (const t of state.transactions) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t) === "exact") { used.add(t.id); r.dupe = { desc: t.desc, date: t.date, how: "exact", where: "saved" }; break; } }
+    for (const r of all) for (const t of pool) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t) === "exact") { used.add(t.id); r.dupe = { desc: t.desc, date: t.date, how: "exact", where: "saved" }; break; } }
     all.forEach((r) => {
       if (r.dupe) return;
       let hit = null;
-      for (const t of state.transactions) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t)) { hit = t; break; } }
+      for (const t of pool) { if (used.has(t.id) || t.example) continue; if (looksSame(r, t)) { hit = t; break; } }
       if (hit) { used.add(hit.id); r.dupe = { desc: hit.desc, date: hit.date, how: "close", where: "saved" }; return; }
       // the same row in two overlapping files (rows within one file are never flagged against each other)
       const twin = accepted.find((x) => x.file !== r.file && !x.twinned && looksSame(r, x));
@@ -3021,7 +3171,7 @@
           (all && (d.slice(0, 7) !== (window.__lastMonthHead || "")) ? (window.__lastMonthHead = d.slice(0, 7), '<h3 class="month-head">' + esc(monthLabel(d.slice(0, 7))) + "</h3>") : "") +
           '<div class="label" style="margin-top:12px">' + parseISO(d).toLocaleDateString(C.locale, all ? { weekday: "short", month: "short", day: "numeric", year: "numeric" } : { weekday: "short", month: "short", day: "numeric" }) + '</div><div class="list">' +
           list.map((t) => { const c = catById(t.cat); return '<div class="item tx-item' + (selMode && selIds.has(t.id) ? " picked" : "") + '">' + (selMode ? '<input type="checkbox" class="tx-pick" data-change="txPick" data-id="' + t.id + '"' + (selIds.has(t.id) ? " checked" : "") + ' aria-label="Select ' + esc(t.desc) + '">' : "") + bubble(c.icon, c.color) +
-            '<div class="grow"><div class="t">' + esc(t.desc) + exTag(t) + '</div><div class="tiny muted">' + esc(c.name) + "</div></div>" +
+            '<div class="grow"><div class="t">' + esc(t.desc) + exTag(t) + '</div><div class="tiny muted">' + esc(c.name) + (t.split ? " · ✂️ split" : "") + (acctName(t.acct) ? " · " + esc(acctName(t.acct)) : "") + (t.cat === "returns" && t.from ? " · back to " + esc(catById(t.from).name) : "") + "</div></div>" +
             '<select data-change="txCatInline" data-id="' + t.id + '" aria-label="Category">' + catOptions(t.cat) + "</select>" +
             '<span class="amt ' + (t.kind === "income" ? "good" : "") + '">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</span>" +
             '<button class="iconbtn" data-act="editTx" data-id="' + t.id + '" title="Edit">' + icon("pencil") + '</button><button class="iconbtn del" data-act="delTx" data-id="' + t.id + '" title="Delete">' + icon("trash-2") + "</button></div>"; }).join("") + "</div>").join("")
@@ -3049,7 +3199,7 @@
         (p.rows.some((t, i) => (p.skip || {})[i] && CARD_PAYMENT.test(t.desc)) ? '<p class="tiny muted">💳 Credit card payments start unticked: paying off your card isn\'t new money, it\'s already counted when you spent it.</p>' : "") +
         p.rows.map((t, i) => '<tr class="' + ((p.skip || {})[i] ? "skipped" : "") + (t.dupe ? " is-dupe" : "") + '"><td><input type="checkbox" data-change="importSkip" data-i="' + i + '"' + ((p.skip || {})[i] ? "" : " checked") + ' aria-label="Include this one"></td><td>' + t.date + "</td><td>" + esc(t.desc) + (t.dupe ? '<div class="dupe-note tiny">⚠️ ' + (t.dupe.how === "exact" ? "Duplicate of" : "Looks like") + ' <b>' + esc(t.dupe.desc) + "</b> on " + esc(t.dupe.date) + (t.dupe.where === "file" ? " in another file" : " (already in Penny)") + ". Tick to keep it anyway.</div>" : "") + "</td><td><select class=\"import-cat\" data-change=\"importCat\" data-i=\"" + i + "\" aria-label=\"Category\">" + catOptions(t.cat) + "</select></td>" + (p.files && p.files.length > 1 ? '<td class="tiny muted">' + esc(p.files[t.file] || "") + "</td>" : "") + '<td class="r"><button type="button" class="amt-flip ' + (t.kind === "income" ? "good" : "") + '" data-act="flipRow" data-i="' + i + '" title="Tap to switch money in / money out">' + (t.kind === "income" ? "+" : "-") + money2(t.amount) + "</button></td></tr>").join("") +
         "</tbody></table></div>" +
-        balanceSection(p) +
+        linkSection(p) + balanceSection(p) +
         '<div class="callout">' + icon("info") + "<div>Spending should show as minus and paycheques as plus. If it's backwards (common with credit card files), press Flip.</div></div>" +
         '<div class="row" style="margin-top:12px"><button class="btn" data-act="doImport">' + icon("check") + " Import " + (p.rows.length - Object.values(p.skip || {}).filter(Boolean).length) + '</button>' + (p.files && p.files.length > 1 ? p.files.map((n, i) => '<button class="btn ghost sm" data-act="flipImport" data-file="' + i + '">' + icon("refresh-cw") + " Flip " + esc(n.length > 18 ? n.slice(0, 16) + "…" : n) + "</button>").join("") : '<button class="btn ghost" data-act="flipImport">' + icon("refresh-cw") + " Flip plus/minus</button>") + '<button class="btn ghost" data-act="cancelImport">Cancel</button></div>';
     }
@@ -3095,8 +3245,9 @@
           const cats = state.categories.filter((c) => c.group === g);
           return '<div><div class="row between" style="margin:6px 0 10px"><div><h2>' + name + '</h2><p class="small muted">' + sub + '</p></div><div class="row" style="gap:8px"><span class="pill ' + g + '">' + money(b[g]) + ' / month</span><button class="btn soft sm" data-act="editCat" data-group="' + g + '">' + icon("plus") + " Add to " + name + "</button></div></div>" +
             '<div class="grid g3">' + cats.map((c) => {
-              const sp = m.byCat[c.id] || 0, p = c.budget ? sp / c.budget : sp ? 1.01 : 0, left = c.budget - sp;
-              return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : !c.budget ? (sp ? "Spent " + money(sp) + ", no budget yet" : "No budget yet") : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div></div>" +
+              const sp = m.byCat[c.id] || 0, carry = catCarry(c, ym), avail = (+c.budget || 0) + carry, p = avail > 0 ? sp / avail : sp ? 1.01 : 0, left = avail - sp;
+              return '<div class="card stack" style="gap:10px"><div class="row" style="flex-wrap:nowrap">' + bubble(c.icon, c.color) + '<div style="flex:1;min-width:0"><b>' + esc(c.name) + '</b><div class="small muted">' + (g === "save" ? "Moved " + money(sp) : !c.budget && !carry ? (sp ? "Spent " + money(sp) + ", no budget yet" : "No budget yet") : left >= 0 ? money(left) + " left" : '<span class="warn">' + money(-left) + " over plan. It happens!</span>") + "</div>" +
+                (c.rollover && g !== "save" ? '<div class="tiny muted roll-note">🔁 Rolls over' + (carry > 0 ? ": " + money(carry) + " carried in" : carry < 0 ? ": " + money(-carry) + " over last time, taken off" : "") + "</div>" : "") + "</div>" +
                 '<button class="iconbtn" data-act="editCat" data-id="' + c.id + '" title="Edit category">' + icon("pencil") + "</button></div>" + bar(p, g === "save") +
                 (billsFor(c.id).length ? '<div class="tiny muted bills-in">📺 Bills: ' + billsFor(c.id).map((x) => esc(x.name) + " " + money2(monthlyCost(x))).join(", ") + (billsFor(c.id).length > 1 ? " = " + money2(billsMonthly(c.id)) : "") + " a month</div>" : "") +
                 '<div class="row between small"><span class="muted">Spent ' + money(sp) + "</span>" + '<label class="row" style="gap:6px"><span class="muted">Budget</span><span class="money-in" style="width:100px"><input type="number" min="0" step="1" value="' + (+c.budget || "") + '" placeholder="0" data-change="catBudget" data-id="' + c.id + '" aria-label="Monthly budget for ' + esc(c.name) + '"></span></label></div>' + catBreakdown(c, ym) + "</div>";
@@ -3104,6 +3255,67 @@
         }).join("") +
         '<div class="card"><div class="card-head"><h2>💡 Tips for you</h2>' + (pennyOn() ? mascot(64, "P", "thinking") : "") + '</div><div class="tip-list">' + smartTips().map(([cls, ic, html]) => '<div class="callout ' + cls + '">' + icon(ic) + "<div>" + html + "</div></div>").join("") + "</div></div>" +
         '<div class="card"><div class="card-head"><h3>' + icon("briefcase") + ' Income categories</h3></div><div class="row">' + state.categories.filter((c) => c.group === "income").map((c) => '<button class="btn soft sm" data-act="editCat" data-id="' + c.id + '">' + icon(c.icon) + esc(c.name) + "</button>").join("") + "</div></div>" +
+        "</div>";
+    }
+  };
+
+  /* PAGE: Reports ------------------------------------------------------- */
+  const pad2 = (n) => String(n).padStart(2, "0");
+  function yearMonths(y) { return Array.from({ length: 12 }, (_, i) => y + "-" + pad2(i + 1)); }
+  function catTotals(months) {
+    const out = {}; let income = 0, spent = 0, saved = 0;
+    for (const k of months) { const m = monthStats(k); income += m.income; spent += m.spent; saved += m.saved; for (const [id, v] of Object.entries(m.byCat)) if (catById(id).group !== "save") out[id] = (out[id] || 0) + v; }
+    return { byCat: out, income, spent, saved };
+  }
+  // % change, coloured: more spending is red, less is green (flip it for money in)
+  const delta = (now, before, upIsGood) => {
+    if (!before) return now ? '<span class="tiny muted">new</span>' : "";
+    const d = (now - before) / before, up = d > 0.005, down = d < -0.005;
+    return '<span class="tiny ' + (up ? (upIsGood ? "good" : "bad") : down ? (upIsGood ? "bad" : "good") : "muted") + '">' + (d > 0 ? "+" : "") + Math.round(d * 100) + "%</span>";
+  };
+  PAGES.reports = {
+    render() {
+      const mine = state.transactions.filter((t) => !t.example || state.isExample);
+      const years = Array.from(new Set(mine.map((t) => +t.date.slice(0, 4)).concat([new Date().getFullYear()]))).sort((a, b) => b - a);
+      const y = years.includes(+state.ui.repYear) ? +state.ui.repYear : years[0];
+      const cur = thisMonth(), lastFull = String(y) === cur.slice(0, 4) ? cur.slice(5) : "12";
+      const months = yearMonths(y), ytd = months.filter((k) => k.slice(5) <= lastFull), prevYtd = ytd.map((k) => (y - 1) + k.slice(4));
+      const Y = catTotals(ytd), PY = catTotals(prevYtd);
+      const rows = months.map((k) => { const m = monthStats(k); return { k, label: monthLabel(k, { month: "short" }), income: m.income, spent: m.spent, saved: m.saved, net: m.income - m.spent - m.saved }; });
+      const thisM = monthStats(cur), lastM = monthStats(shiftMonth(cur, -1));
+      const mom = Array.from(new Set(Object.keys(thisM.byCat).concat(Object.keys(lastM.byCat)))).filter((id) => catById(id).group !== "save")
+        .map((id) => ({ c: catById(id), now: thisM.byCat[id] || 0, before: lastM.byCat[id] || 0 })).filter((r) => r.now || r.before).sort((a, b) => Math.abs(b.now - b.before) - Math.abs(a.now - a.before));
+      const yoy = Array.from(new Set(Object.keys(Y.byCat).concat(Object.keys(PY.byCat)))).map((id) => ({ c: catById(id), now: Y.byCat[id] || 0, before: PY.byCat[id] || 0 })).filter((r) => r.now || r.before).sort((a, b) => b.now - a.now);
+      const pickable = state.categories.filter((c) => c.group === "need" || c.group === "want");
+      const trendCat = pickable.some((c) => c.id === state.ui.repCat) ? state.ui.repCat : (yoy[0] && pickable.some((c) => c.id === yoy[0].c.id) ? yoy[0].c.id : (pickable[0] || OTHER).id);
+      const trend = Array.from({ length: 12 }, (_, i) => { const k = shiftMonth(cur, i - 11); return { label: monthLabel(k, { month: "short" }), v: monthStats(k).byCat[trendCat] || 0 }; });
+      const vsLabel = ytd.length === 12 ? "vs " + (y - 1) : "vs the same months of " + (y - 1);
+      const any = rows.some((r) => r.income || r.spent || r.saved);
+      const table = (list, a, b) => '<div class="table-wrap"><table class="rep-table"><thead><tr><th>Category</th><th class="r">' + a + '</th><th class="r">' + b + '</th><th class="r">Change</th></tr></thead><tbody>' +
+        list.map((r) => "<tr><td>" + esc(r.c.name) + '</td><td class="r num">' + money(r.before) + '</td><td class="r num">' + money(r.now) + '</td><td class="r">' + delta(r.now, r.before) + "</td></tr>").join("") + "</tbody></table></div>";
+      return '<div class="page">' + exampleNote() +
+        head("Reports", "How your money moved: month by month, year over year and by category.",
+          '<label class="field inline">Year <select data-change="reportYear">' + years.map((yy) => '<option value="' + yy + '"' + (yy === y ? " selected" : "") + ">" + yy + "</option>").join("") + "</select></label>" +
+          '<button class="btn ghost" data-act="reportExport" data-y="' + y + '">' + icon("download") + " Year summary (CSV)</button>") +
+        '<div class="grid g3">' +
+          stat("briefcase", "#5fae7c", "Money in" + (ytd.length < 12 ? " so far" : ""), money(Y.income), PY.income ? delta(Y.income, PY.income, true) + " " + vsLabel : "Your first year in Penny") +
+          stat("shopping-bag", "#e39bbd", "Spent", money(Y.spent), PY.spent ? delta(Y.spent, PY.spent) + " " + vsLabel : "Your first year in Penny") +
+          stat("piggy-bank", "#5aa9a2", "Saved", money(Y.saved), Y.income ? pct(Y.saved / Y.income, 0) + " of money in" : "") + "</div>" +
+        '<div class="card"><div class="card-head"><h2>📅 ' + y + " month by month</h2></div>" +
+          (any ? barChart(rows.map((r) => ({ label: r.label, income: r.income, spent: r.spent })), [{ key: "income", name: "In", color: "#5fae7c" }, { key: "spent", name: "Spent", color: "#e39bbd" }], 720, 230) +
+          '<div class="table-wrap"><table class="rep-table"><thead><tr><th>Month</th><th class="r">In</th><th class="r">Spent</th><th class="r">Saved</th><th class="r">Left over</th></tr></thead><tbody>' +
+          rows.filter((r) => r.income || r.spent || r.saved).map((r) => "<tr><td>" + esc(monthLabel(r.k)) + '</td><td class="r num">' + money(r.income) + '</td><td class="r num">' + money(r.spent) + '</td><td class="r num">' + money(r.saved) + '</td><td class="r num ' + (r.net < 0 ? "bad" : "") + '">' + money(r.net) + "</td></tr>").join("") +
+          '<tr class="tot"><td>Total</td><td class="r num">' + money(rows.reduce((a, r) => a + r.income, 0)) + '</td><td class="r num">' + money(rows.reduce((a, r) => a + r.spent, 0)) + '</td><td class="r num">' + money(rows.reduce((a, r) => a + r.saved, 0)) + '</td><td class="r num">' + money(rows.reduce((a, r) => a + r.net, 0)) + "</td></tr></tbody></table></div>"
+          : '<p class="muted">Nothing for ' + y + ' yet. <a href="#spending">Add or import transactions</a> and this fills in.</p>') + "</div>" +
+        '<div class="grid g2">' +
+          '<div class="card"><div class="card-head"><h2>' + esc(monthLabel(cur, { month: "long" })) + " vs " + esc(monthLabel(shiftMonth(cur, -1), { month: "long" })) + "</h2></div>" +
+            (mom.length ? table(mom.slice(0, 12), "Last month", "This month") : '<p class="muted">Nothing logged yet.</p>') +
+            '<p class="tiny muted" style="margin-top:8px">This month isn\'t over yet, so it usually looks lower.</p></div>' +
+          '<div class="card"><div class="card-head"><h2>' + y + " " + esc(vsLabel) + "</h2></div>" +
+            (yoy.length ? table(yoy.slice(0, 14), String(y - 1), String(y)) : '<p class="muted">Nothing logged yet.</p>') + "</div></div>" +
+        '<div class="card"><div class="card-head"><h2>📈 Category trend</h2><select data-change="reportCat" style="width:auto" aria-label="Category">' + pickable.map((c) => '<option value="' + c.id + '"' + (c.id === trendCat ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</select></div>" +
+          barChart(trend, [{ key: "v", name: catById(trendCat).name, color: catById(trendCat).color || "#9d94ea" }], 720, 200) +
+          '<p class="small muted">Last 12 months. Average ' + money(trend.reduce((a, x) => a + x.v, 0) / 12) + " a month" + (catById(trendCat).budget ? ", budget " + money(catById(trendCat).budget) : "") + ".</p></div>" +
         "</div>";
     }
   };
@@ -3182,14 +3394,16 @@
       const latest = state.credit.slice().sort((a, b) => b.date.localeCompare(a.date));
       const sc = latest[0] ? latest[0].score : null;
       const group = (title, list, kind) => '<div class="card"><div class="card-head"><h2>' + title + '</h2><b class="' + (kind === "debt" ? "bad" : "good") + '">' + money(list.reduce((a, x) => a + num(x.balance), 0)) + '</b></div><div class="list">' +
-        (list.length ? list.map((a) => { const t = acctType(a.type); return '<div class="item">' + bubble(t.icon, kind === "debt" ? "#d98383" : "#5fae7c") + '<div class="grow"><div class="t">' + esc(a.name) + exTag(a) + '</div><div class="tiny muted">' + esc(t.name) + (a.asOf && !(a.manualOn && a.manualOn > a.asOf) ? " · from your statement, " + esc(dayLabel(parseISO(a.asOf))) : a.updated && !a.example ? " · you updated it " + esc(dayLabel(parseISO(a.manualOn || a.updated))) : "") + "</div></div>" +
+        (list.length ? list.map((a) => { const t = acctType(a.type); return '<div class="item">' + bubble(t.icon, kind === "debt" ? "#d98383" : "#5fae7c") + '<div class="grow"><div class="t">' + esc(a.name) + exTag(a) + '</div><div class="tiny muted">' + esc(t.name) + (a.asOf && !(a.manualOn && a.manualOn > a.asOf) ? " · from your statement, " + esc(dayLabel(parseISO(a.asOf))) : a.updated && !a.example ? " · you updated it " + esc(dayLabel(parseISO(a.manualOn || a.updated))) : "") + (a.track ? ' · <span class="auto-tag">🔄 auto-updates</span>' : "") + "</div></div>" +
           '<span class="money-in" style="width:130px"><input type="number" step="any" value="' + num(a.balance) + '" data-change="acctBal" data-id="' + a.id + '" aria-label="Balance of ' + esc(a.name) + '"></span>' +
           '<button class="iconbtn" data-act="editAcct" data-id="' + a.id + '" title="Edit">' + icon("pencil") + '</button><button class="iconbtn del" data-act="delAcct" data-id="' + a.id + '" title="Delete">' + icon("trash-2") + "</button></div>"; }).join("")
           : '<p class="small muted">' + (kind === "debt" ? "Credit cards, OSAP, car loans, mortgage." : "Chequing, savings, TFSA, RRSP, FHSA.") + "</p>") + "</div></div>";
+      const CP = cashPosition();
+      const cover = CP.monthly > 0 && CP.cash > 0 ? '<p class="small cash-cover">🛟 Your chequing and savings cover about <b>' + CP.months.toFixed(1) + (CP.months >= 0.95 && CP.months < 1.05 ? " month" : " months") + "</b> of spending (" + money(CP.monthly) + " a month)." + (CP.months < CP.target ? " A good first target is " + CP.target + " months." : " Nice cushion!") + "</p>" : "";
       return '<div class="page">' + exampleNote() +
         head("Net worth", "What you own minus what you owe. Update the balances once a month and watch the line go up.", '<button class="btn" data-act="editAcct">' + icon("plus") + " Add account</button>") +
         '<div class="grid g2"><div class="card"><div class="label">Your net worth</div><div class="big-number ' + (A - D >= 0 ? "" : "bad") + '">' + money(A - D) + "</div>" +
-        '<div class="row small muted" style="gap:16px;margin:4px 0 12px"><span>Own <b class="good">' + money(A) + "</b></span><span>Owe <b class=\"bad\">" + money(D) + "</b></span></div>" +
+        '<div class="row small muted" style="gap:16px;margin:4px 0 12px"><span>Own <b class="good">' + money(A) + "</b></span><span>Owe <b class=\"bad\">" + money(D) + "</b></span></div>" + cover +
         (hist.length > 1 ? lineChart(hist.map((h) => monthLabel(h.ym, { month: "short" })), [{ ys: hist.map((h) => h.net), color: "var(--accent)", area: true }], { h: 200 }) : '<p class="small muted">Your chart starts after your first update. A new point is saved each month.</p>') + "</div>" +
         '<div class="card"><div class="card-head"><h2>' + icon("credit-card") + " Credit score</h2></div>" +
         (sc ? '<div class="row" style="gap:18px">' + gauge(sc) + '<div><div class="big-number">' + sc + '</div><span class="pill" style="color:' + band(sc)[2] + '">' + band(sc)[1] + '</span><p class="small muted" style="margin-top:6px">' + (latest[1] ? (sc - latest[1].score >= 0 ? "Up " : "Down ") + Math.abs(sc - latest[1].score) + " since " + parseISO(latest[1].date).toLocaleDateString(C.locale, { month: "short", year: "numeric" }) : "Your first entry") + "</p></div></div>"
@@ -3436,6 +3650,7 @@
         '<div class="card stack"><h2>' + icon("download") + ' Back up</h2><p class="small muted">' + (signedIn() ? "Sync is on, so your data is also saved to your account. A backup file is still a nice extra safety net." : "Your data lives only in this browser. Clearing browser history or switching computers will lose it. Back up once a month.") + "</p>" +
         '<div class="row"><button class="btn" data-act="backup">' + icon("download") + ' Download backup</button><button class="btn ghost" data-act="exportCsv">' + icon("receipt") + " Transactions as CSV</button></div>" +
         '<label class="field">Restore a backup<input type="file" accept=".json,application/json" data-change="restore"></label><p class="tiny muted">Using about ' + Math.round(size / 1024) + " KB of roughly 5,000 KB browsers allow. Photos use the most.</p></div></div>" +
+        trashCard() +
         '<div class="card stack"><h2>' + icon("refresh-cw") + ' Start over</h2>' + (resetArmed && pennyOn() ? '<div class="row" style="flex-wrap:nowrap">' + mascot(80, "P", "sad") + '<p class="small"><b>Are you sure?</b> ' + esc(C.mascotName || "Penny") + " will miss all your hard work. Download a backup first!</p></div>" : "") + '<div class="row">' + (state.isExample ? '<button class="btn gold" data-act="clearExample">Clear example data</button>' : "") +
         '<button class="btn danger" data-act="reset">' + (resetArmed ? "Press again to erase everything" : "Erase everything") + '</button></div><p class="small muted">Erasing keeps nothing: transactions, goals, XP, all of it. Download a backup first.' + (signedIn() ? " Sync is on, so this also erases it on your other devices." : "") + "</p></div>" +
         '<div class="card stack"><h2>🐷 Setup</h2><p class="small">Want to walk through the 10 setup questions again? Your answers fill in what\'s already there.</p><div class="row"><button class="btn ghost" data-act="openWizard">Run the setup again</button></div></div>' +
@@ -3466,6 +3681,7 @@
   }
   let lastPage = null;
   function render() {
+    carryMemo = {};
     const id = pageId(), page = PAGES[id];
     const logo = $(".logo b"); if (logo && logo.textContent !== C.appName) { logo.textContent = C.appName; document.title = C.appName; }
     const mark = $(".logo .mark"); if (mark) mark.innerHTML = mascot(34);
@@ -3578,7 +3794,29 @@
       field("What was it?", '<input name="desc" value="' + esc(t.desc) + '" placeholder="e.g. Tim Hortons">') +
       '<div><div class="label" style="margin-bottom:6px">Category <span class="cat-hint tiny muted"></span></div><div class="catpick" id="catPick"' + (isNew ? "" : ' data-picked="1"') + ">" + catPick(t.kind, t.cat) + "</div></div>" +
       '<label class="check small"><input type="checkbox" name="learn"> Always sort this name into this category</label>' +
-      '<div class="row"><button class="btn">' + icon("check") + (isNew ? " Add it" : " Save") + '</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>');
+      (state.accounts.some((a) => !a.example) ? field("Account or card", '<select name="acct"><option value="">Not linked</option>' + state.accounts.filter((a) => !a.example).map((a) => '<option value="' + a.id + '"' + (t.acct === a.id ? " selected" : "") + ">" + esc(a.name) + (a.track ? " (auto-updates)" : "") + "</option>").join("") + "</select>", "Where the money came from or went. Accounts set to auto-update move with it.") : "") +
+      (!isNew && t.cat === "returns" ? field("Came back to", '<select name="from"><option value="">Just lower my spending</option>' + state.categories.filter((c) => c.group === "need" || c.group === "want").map((c) => '<option value="' + c.id + '"' + (t.from === c.id ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + "</select>", "The budget this return comes off") : "") +
+      (t.split ? '<p class="tiny muted">✂️ Part ' + (t.splitN || 1) + " of a split purchase.</p>" : "") +
+      '<div class="row"><button class="btn">' + icon("check") + (isNew ? " Add it" : " Save") + '</button><button type="button" class="btn ghost" data-close>Cancel</button>' +
+        (!isNew && t.kind === "expense" ? '<button type="button" class="btn ghost" data-act="splitTx" data-id="' + t.id + '" style="margin-left:auto">' + icon("scissors") + (t.split ? " Edit split" : " Split") + "</button>" : "") + "</div></form>");
+  }
+  // Split one purchase across categories: it becomes linked parts that always add up to the total
+  function splitModal(t) {
+    const parts = t.split ? state.transactions.filter((x) => x.split === t.split) : [t];
+    const total = parts.reduce((a, x) => a + +x.amount, 0);
+    const row = (p) => '<div class="split-row"><select name="cat" aria-label="Category">' + catOptions(p.cat) + "</select>" + moneyInput('name="amt" min="0" step="0.01" aria-label="Amount" value="' + (p.amount !== "" ? (+p.amount).toFixed(2) : "") + '"') + '<button type="button" class="iconbtn del" data-act="splitDel" title="Remove this part">' + icon("x") + "</button></div>";
+    openModal('<form data-form="saveSplit" class="stack"><input type="hidden" name="id" value="' + t.id + '"><input type="hidden" name="total" value="' + total.toFixed(2) + '">' +
+      "<h2>✂️ Split " + esc(t.desc) + '</h2><p class="small muted">Divide ' + money2(total) + " across categories, like groceries and household stuff from one Costco trip. Each part counts toward its own budget.</p>" +
+      '<div id="splitRows" class="stack">' + parts.map(row).join("") + (parts.length < 2 ? row({ cat: "other", amount: "" }) : "") + "</div>" +
+      '<button type="button" class="btn ghost sm" data-act="splitAdd" style="align-self:flex-start">' + icon("plus") + " Add a part</button>" +
+      '<p class="small" id="splitLeft"></p>' +
+      '<div class="row"><button class="btn">' + icon("check") + ' Save split</button><button type="button" class="btn ghost" data-close>Cancel</button>' + (t.split ? '<button type="button" class="btn ghost" data-act="unsplitTx" data-id="' + t.id + '" style="margin-left:auto">Undo split</button>' : "") + "</div></form>");
+    window.__splitRow = row; splitLeft();
+  }
+  function splitLeft() {
+    const f = $('form[data-form="saveSplit"]'); if (!f) return;
+    const total = +f.total.value, used = Array.from(f.querySelectorAll('input[name="amt"]')).reduce((a, i) => a + (num(i.value) || 0), 0), left = Math.round((total - used) * 100) / 100;
+    const el = $("#splitLeft"); if (el) el.innerHTML = left === 0 ? '<span class="good">✅ Parts add up to ' + money2(total) + "</span>" : left > 0 ? money2(left) + " left to give a category" : '<span class="bad">' + money2(-left) + " more than the total</span>";
   }
   function catPick(kind, sel) {
     const cats = state.categories.filter((c) => c.group === "transfer" || (kind === "income") === (c.group === "income")).concat(kind === "income" ? [] : [OTHER]);
@@ -3592,6 +3830,7 @@
       '<input type="hidden" name="icon" value="' + esc(c.icon) + '"><input type="hidden" name="color" value="' + esc(c.color) + '">' +
       '<div><div class="label" style="margin-bottom:6px">Colour</div><div class="swatches">' + C.swatches.map((s) => '<button type="button" data-act="pickColor" data-v="' + s + '" style="background:' + s + '" class="' + (s === c.color ? "on" : "") + '" aria-label="Colour ' + s + '"></button>').join("") + "</div></div>" +
       '<div><div class="label" style="margin-bottom:6px">Icon</div><div class="icon-grid">' + Object.keys(ICONS).map((k) => '<button type="button" data-act="pickIcon" data-v="' + k + '" class="' + (k === c.icon ? "on" : "") + '" title="' + k + '">' + icon(k) + "</button>").join("") + "</div></div>" +
+      (c.group === "income" || c.group === "transfer" ? "" : '<label class="check small"><input type="checkbox" name="rollover"' + (c.rollover ? " checked" : "") + '> 🔁 Roll over: money you don\'t spend carries into next month (and going over takes it off next month)</label>') +
       '<div class="row"><button class="btn">' + icon("check") + ' Save</button><button type="button" class="btn ghost" data-close>Cancel</button>' + (isNew ? "" : '<button type="button" class="btn danger" data-act="delCat" data-id="' + c.id + '" style="margin-left:auto">' + icon("trash-2") + " Delete</button>") + "</div></form>");
   }
   function subModal(s) {
@@ -3622,6 +3861,8 @@
     openModal('<form data-form="saveAcct" class="stack"><input type="hidden" name="id" value="' + esc(a.id || "") + '"><h2>' + (isNew ? "Add an account" : "Edit account") + "</h2>" +
       '<div class="fgrid">' + field("Type", '<select name="type">' + C.accountTypes.map((t) => '<option value="' + t.id + '"' + (a.type === t.id ? " selected" : "") + ">" + t.name + (t.kind === "debt" ? " (owe)" : "") + "</option>").join("") + "</select>") +
       field("Name", '<input name="name" value="' + esc(a.name) + '" placeholder="e.g. TD chequing">') + field("Balance", moneyInput('name="balance" required value="' + esc(a.balance) + '"'), "For debts, type what you owe as a positive number") + "</div>" +
+      '<label class="check small"><input type="checkbox" name="track"' + (a.track ? " checked" : "") + '> 🔄 Keep this balance up to date from transactions linked to this account</label>' +
+      '<p class="tiny muted">Starts from the balance above. Every transaction you link to this account after today moves it: money in adds, money out takes away (on a credit card it\'s the other way round). You can link transactions when you import or edit them.</p>' +
       '<div class="row"><button class="btn">' + icon("check") + ' Save</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>');
   }
 
@@ -3649,7 +3890,7 @@
     selDelete() {
       if (!selIds.size) return;
       if (!window.__delArmed) { window.__delArmed = true; toast("Tap Delete again to remove " + selIds.size + " transactions"); setTimeout(() => { window.__delArmed = false; }, 4000); return; }
-      window.__delArmed = false; const n = selIds.size; state.transactions = state.transactions.filter((t) => !selIds.has(t.id)); selIds.clear(); commit("Deleted " + n + " transactions");
+      window.__delArmed = false; const n = selIds.size; toTrash("transactions", state.transactions.filter((t) => selIds.has(t.id))); state.transactions = state.transactions.filter((t) => !selIds.has(t.id)); selIds.clear(); commit("Deleted " + n + ' transactions. They\'re in the trash on <a href="#mydata">My data</a> for 30 days.');
     },
     sortOther() {
       const list = state.transactions.filter((t) => !t.example && t.cat === "other" && !t.recatOn);
@@ -3753,7 +3994,40 @@
     month(el) { state.ui.month = shiftMonth(state.ui.month, +el.dataset.d); save(); render(); },
     addTx() { txModal(); },
     editTx(el) { txModal(state.transactions.find((t) => t.id === el.dataset.id)); },
-    delTx(el) { state.transactions = state.transactions.filter((t) => t.id !== el.dataset.id); commit("Deleted"); },
+    delTx(el) { toTrash("transactions", state.transactions.find((t) => t.id === el.dataset.id)); state.transactions = state.transactions.filter((t) => t.id !== el.dataset.id); commit('Deleted. <button class="linklike" data-act="undoDelete">Undo</button>'); },
+    splitTx(el) { const t = state.transactions.find((x) => x.id === el.dataset.id); if (t) splitModal(t); },
+    splitAdd() { const box = $("#splitRows"); if (box && window.__splitRow) box.insertAdjacentHTML("beforeend", window.__splitRow({ cat: "other", amount: "" })); splitLeft(); },
+    splitDel(el) { const box = $("#splitRows"); if (box && box.children.length > 2) el.closest(".split-row").remove(); splitLeft(); },
+    unsplitTx(el) {
+      const t = state.transactions.find((x) => x.id === el.dataset.id); if (!t || !t.split) return;
+      const parts = state.transactions.filter((x) => x.split === t.split), first = parts.slice().sort((a, b) => (a.splitN || 0) - (b.splitN || 0))[0];
+      const merged = Object.assign({}, first, { amount: Math.round(parts.reduce((a, x) => a + +x.amount, 0) * 100) / 100 }); delete merged.split; delete merged.splitN;
+      state.transactions = state.transactions.filter((x) => x.split !== t.split); state.transactions.push(merged);
+      closeModal(); commit("Split undone");
+    },
+    hideNote(el) { const k = thisMonth(); state.ui.hideNotes = state.ui.hideNotes || {}; (state.ui.hideNotes[k] = state.ui.hideNotes[k] || []).push(el.dataset.id); save(); render(); },
+    reportExport(el) {
+      const y = +el.dataset.y, months = yearMonths(y), stats = months.map((k) => monthStats(k));
+      const cats = state.categories.filter((c) => c.group !== "transfer" && c.group !== "income").concat([OTHER]);
+      const headRow = ["Category", "Type"].concat(months.map((k) => monthLabel(k, { month: "short" }))).concat(["Total"]);
+      const line = (name, type, vals) => [name, type].concat(vals.map((v) => v.toFixed(2))).concat([vals.reduce((a, v) => a + v, 0).toFixed(2)]);
+      const rows = [headRow, line("Money in", "Total", stats.map((m) => m.income)), line("Spent", "Total", stats.map((m) => m.spent)), line("Saved", "Total", stats.map((m) => m.saved)), []];
+      for (const c of cats) { const vals = stats.map((m) => m.byCat[c.id] || 0); if (vals.some((v) => v)) rows.push(line(c.name, GROUPS[c.group] || c.group, vals)); }
+      offerFile("penny-pal-" + y + "-summary.csv", rows.map((r) => r.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n"), "text/csv");
+    },
+    undoDelete() { const x = state.trash && state.trash[0]; if (x) ACT.restoreTrash({ dataset: { id: x.id } }); },
+    restoreTrash(el) {
+      const i = (state.trash || []).findIndex((x) => x.id === el.dataset.id), x = i >= 0 ? state.trash[i] : null; if (!x) return;
+      state.trash.splice(i, 1);
+      const list = (state[x.kind] = state[x.kind] || []);
+      if (!list.some((y) => y.id === x.item.id)) list.push(x.item);
+      if (x.kind === "accounts") snapshotNet();
+      commit("Put back: " + esc(x.item.desc || x.item.name || x.item.text || "item"));
+    },
+    emptyTrash() {
+      if (!window.__trashArmed) { window.__trashArmed = true; toast("Tap Empty trash again to delete these for good"); setTimeout(() => { window.__trashArmed = false; }, 4000); return; }
+      window.__trashArmed = false; state.trash = []; commit("Trash emptied");
+    },
     toggleImport() { const b = $("#importBox"); if (b) b.hidden = !b.hidden; },
     flipImport(el) {
       const p = pendingImport; if (!p) return;
@@ -3766,7 +4040,8 @@
     cancelImport() { pendingImport = null; render(); },
     doImport() {
       const skip = pendingImport.skip || {};
-      const rows = pendingImport.rows.filter((r, i) => !skip[i]).map((r) => { const t = Object.assign({ id: uid(), added: todayISO(), src: "import" }, r); delete t.picked; delete t.file; delete t.bi; delete t.dupe; if (r.picked) t.recatOn = todayISO(); return t; });
+      const links = pendingImport.links || [];
+      const rows = pendingImport.rows.filter((r, i) => !skip[i]).map((r) => { const t = Object.assign({ id: uid(), added: todayISO(), src: "import" }, r); if (links[r.file]) { t.acct = links[r.file]; t.linkAt = Date.now() - 1; } delete t.picked; delete t.file; delete t.bi; delete t.dupe; if (r.picked) t.recatOn = todayISO(); return t; });
       state.transactions.push(...rows); state.flags.imported = true; state.flags.importOn = todayISO();
       if (rows.length) state.ui.month = rows.map((r) => r.date).sort().pop().slice(0, 7);
       const paid = markBillsPaid(rows);
@@ -3776,6 +4051,7 @@
         let a = state.accounts.find((x) => x.id === b.accountId);
         if (!a) { a = { id: uid(), name: b.newName, type: b.type, balance: 0 }; state.accounts.push(a); }
         const was = +a.balance || 0; a.balance = b.amount; a.updated = todayISO(); a.asOf = b.date; a.example = false; delete a.manualOn;
+        a.baseBal = b.amount; a.baseDate = b.date; a.baseAt = Date.now(); // auto-update counts linked transactions after the statement ends
         balNotes.push(a.name + ": " + money2(was) + " → " + money2(b.amount));
       }
       if (balNotes.length) { snapshotNet(); setTimeout(() => toast("⚖️ The Pig Picture updated. " + esc(balNotes.join(", "))), 1800); }
@@ -3794,7 +4070,7 @@
     pickColor(el) { const f = el.closest("form"); f.color.value = el.dataset.v; $$(".swatches button", f).forEach((b) => b.classList.toggle("on", b === el)); },
     pickTheme(el) { const f = el.closest("form"); f.theme.value = el.dataset.v; $$(".swatches button", f).forEach((b) => b.classList.toggle("on", b === el)); },
     editSub(el) { subModal(el.dataset.id ? state.subs.find((s) => s.id === el.dataset.id) : null); },
-    delSub(el) { state.subs = state.subs.filter((s) => s.id !== el.dataset.id); commit("Removed"); },
+    delSub(el) { toTrash("subs", state.subs.find((s) => s.id === el.dataset.id)); state.subs = state.subs.filter((s) => s.id !== el.dataset.id); commit('Removed. <button class="linklike" data-act="undoDelete">Undo</button>'); },
     addFound(el) { const f = detectSubs()[+el.dataset.i]; if (f) subModal({ name: f.name, amount: f.amount, cycle: "monthly", next: f.next, icon: "repeat", cat: billCat({ name: f.name, cat: f.cat }) }); },
     addFoundAll() {
       const found = window.__found || [], picks = [...document.querySelectorAll('.overlay input[name="found"]:checked')].map((x) => found[+x.value]).filter(Boolean);
@@ -3809,7 +4085,7 @@
       catch (e) { box.select(); toast("Press Ctrl+C or Cmd+C to copy"); }
     },
     editGoal(el) { goalModal(el.dataset.id ? state.goals.find((g) => g.id === el.dataset.id) : null); },
-    delGoal(el) { state.goals = state.goals.filter((g) => g.id !== el.dataset.id); closeModal(); commit("Goal deleted"); },
+    delGoal(el) { toTrash("goals", state.goals.find((g) => g.id === el.dataset.id)); state.goals = state.goals.filter((g) => g.id !== el.dataset.id); closeModal(); commit('Goal deleted. <button class="linklike" data-act="undoDelete">Undo</button>'); },
     removePhoto(el) { const g = state.goals.find((x) => x.id === el.dataset.id); if (g) g.photo = null; closeModal(); commit("Photo removed"); },
     goalTpl(el) {
       const t = C.goalTemplates[+el.dataset.i], f = el.closest("form");
@@ -3826,7 +4102,7 @@
     },
     quickAmt(el) { el.closest("form").amount.value = el.dataset.v; },
     editAcct(el) { acctModal(el.dataset.id ? state.accounts.find((a) => a.id === el.dataset.id) : null); },
-    delAcct(el) { state.accounts = state.accounts.filter((a) => a.id !== el.dataset.id); snapshotNet(); commit("Account removed"); },
+    delAcct(el) { toTrash("accounts", state.accounts.find((a) => a.id === el.dataset.id)); state.accounts = state.accounts.filter((a) => a.id !== el.dataset.id); snapshotNet(); commit('Account removed. <button class="linklike" data-act="undoDelete">Undo</button>'); },
     retireAcct(el) { state.retire.account = el.dataset.v; state.flags.retire = true; state.flags.retireOn = todayISO(); commit(); },
     retireRate(el) { state.retire.rate = +el.dataset.v; state.flags.retire = true; state.flags.retireOn = todayISO(); commit(); },
     housePrice(el) { state.house.price = +el.dataset.v; state.flags.house = true; commit(); },
@@ -3851,7 +4127,7 @@
       if (el.dataset.id) { const r = state.reminders.find((x) => x.id === el.dataset.id); if (r && r.repeat === "none") { r.done = !r.done; commit(); return; } }
       state.dismissed[el.dataset.key] = !state.dismissed[el.dataset.key]; commit();
     },
-    remDel(el) { state.reminders = state.reminders.filter((r) => r.id !== el.dataset.id); commit("Reminder deleted"); },
+    remDel(el) { toTrash("reminders", state.reminders.find((r) => r.id === el.dataset.id)); state.reminders = state.reminders.filter((r) => r.id !== el.dataset.id); commit('Reminder deleted. <button class="linklike" data-act="undoDelete">Undo</button>'); },
     clearExample() {
       const base = blankState();
       for (const k of ["transactions", "subs", "goals", "accounts", "netHistory", "credit"]) state[k] = state[k].filter((x) => !x.example);
@@ -3905,7 +4181,11 @@
     saveTx(f, d) {
       const amount = Math.abs(num(d.amount)); if (!amount) { toast("Type an amount above zero"); return; }
       const t = { date: d.date || todayISO(), desc: (d.desc || "").trim() || catById(d.cat).name, amount, kind: d.kind, cat: d.cat || "other" };
-      if (d.id) { const old = state.transactions.find((x) => x.id === d.id); if (old.cat !== t.cat) t.recatOn = todayISO(); Object.assign(old, t, { example: false }); }
+      if (d.acct !== undefined) t.acct = d.acct || undefined;
+      const was = d.id ? state.transactions.find((x) => x.id === d.id) : null;
+      if (t.acct && (!was || was.acct !== t.acct)) t.linkAt = Date.now();
+      if (d.from !== undefined && t.cat === "returns") t.from = d.from || null;
+      if (d.id) { const old = state.transactions.find((x) => x.id === d.id); if (old.cat !== t.cat) t.recatOn = todayISO(); Object.assign(old, t, { example: false }); if (!t.acct) delete old.acct; }
       else {
         state.transactions.push(Object.assign({ id: uid(), added: todayISO() }, t)); award(C.xp.logTransaction, "Oink! Logged it");
         const paidNow = markBillsPaid([t]); if (paidNow.length) setTimeout(() => toast("✅ " + esc(paidNow[0].sb.name) + " marked as paid. Next one " + esc(dayLabel(nextCharge(paidNow[0].sb)))), 1200);
@@ -3925,9 +4205,24 @@
       state.rules.unshift({ match, cat: d.cat }); commit("Rule added: " + esc(match) + " → " + esc(catById(d.cat).name));
       const box = $('form[data-form="addRule"]'); if (box) { const det = box.closest("details"); if (det) det.open = true; const sel = box.querySelector("select[name=cat]"); if (sel) sel.value = d.cat; const inp = box.querySelector("input[name=match]"); if (inp) inp.focus({ preventScroll: true }); }
     },
+    saveSplit(f) {
+      const t = state.transactions.find((x) => x.id === f.id.value); if (!t) return;
+      const total = +f.total.value, cats = Array.from(f.querySelectorAll('select[name="cat"]')).map((x) => x.value), amts = Array.from(f.querySelectorAll('input[name="amt"]')).map((x) => Math.round((num(x.value) || 0) * 100) / 100);
+      const parts = cats.map((cat, i) => ({ cat, amount: amts[i] })).filter((p) => p.amount > 0);
+      const sum = Math.round(parts.reduce((a, p) => a + p.amount, 0) * 100) / 100;
+      if (parts.length < 2) return toast("Add at least two parts with amounts");
+      if (Math.abs(sum - total) > 0.009) return toast("The parts need to add up to " + money2(total) + " (right now it's " + money2(sum) + ")");
+      const group = t.split || "s" + uid(), old = t.split ? state.transactions.filter((x) => x.split === t.split) : [t];
+      const base = old.slice().sort((a, b) => (a.splitN || 0) - (b.splitN || 0))[0];
+      state.transactions = state.transactions.filter((x) => !old.includes(x));
+      parts.forEach((p, i) => state.transactions.push(Object.assign({}, base, { id: i === 0 ? base.id : uid(), cat: p.cat, amount: p.amount, kind: kindForCat(p.cat, "expense"), split: group, splitN: i + 1, recatOn: todayISO() })));
+      closeModal(); commit("✂️ Split into " + parts.length + " parts");
+    },
     saveCat(f, d) {
-      const c = { name: d.name.trim(), group: d.group, budget: Math.max(0, num(d.budget)), icon: d.icon, color: d.color, touched: true, touchedOn: todayISO() };
-      if (d.id) Object.assign(state.categories.find((x) => x.id === d.id), c);
+      const prev = d.id ? state.categories.find((x) => x.id === d.id) : null;
+      const c = { name: d.name.trim(), group: d.group, budget: Math.max(0, num(d.budget)), icon: d.icon, color: d.color, touched: true, touchedOn: todayISO(), rollover: !!d.rollover && d.group !== "income" && d.group !== "save" };
+      if (c.rollover && !(prev && prev.rollover)) c.rolloverFrom = thisMonth(); // counts from now on, not from the past
+      if (d.id) Object.assign(prev, c);
       else state.categories.push(Object.assign({ id: "c" + uid() }, c));
       closeModal(); commit("Saved");
     },
@@ -3964,7 +4259,8 @@
       commit();
     },
     saveAcct(f, d) {
-      const a = { name: d.name.trim() || acctType(d.type).name, type: d.type, balance: Math.abs(num(d.balance)), updated: todayISO(), manualOn: todayISO() };
+      const a = { name: d.name.trim() || acctType(d.type).name, type: d.type, balance: Math.abs(num(d.balance)), updated: todayISO(), manualOn: todayISO(), track: !!d.track };
+      a.baseBal = a.balance; a.baseDate = todayISO(); a.baseAt = Date.now(); // linked transactions from now on move the balance
       if (d.id) { const ex = state.accounts.find((x) => x.id === d.id); Object.assign(ex, a, { example: false }); delete ex.asOf; }
       else state.accounts.push(Object.assign({ id: uid() }, a));
       snapshotNet(); closeModal(); commit("Saved");
@@ -3980,6 +4276,9 @@
     efPct(el) { state.efund = state.efund || { needsPct: 100, wantsPct: 75 }; state.efund[el.dataset.k] = Math.max(0, Math.min(200, num(el.value))); commit(); },
     txPick(el) { if (el.checked) selIds.add(el.dataset.id); else selIds.delete(el.dataset.id); render(); },
     selAll(el) { (window.__lastShown || []).forEach((id) => { if (el.checked) selIds.add(id); else selIds.delete(id); }); render(); },
+    impAcct(el) { const p = pendingImport; if (!p) return; p.links = p.links || []; p.links[+el.dataset.i] = el.value; },
+    reportYear(el) { state.ui.repYear = +el.value; save(); render(); },
+    reportCat(el) { state.ui.repCat = el.value; save(); render(); },
     balApply(el) { const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (b) b.apply = el.checked; },
     balAcct(el) {
       const b = pendingImport && pendingImport.balances[+el.dataset.i]; if (!b) return;
@@ -4020,7 +4319,7 @@
       const g = state.goals.find((x) => x.id === el.dataset.id);
       readPhoto(el.files && el.files[0], (url) => { g.photo = url; commit(icon("image") + " Photo added"); });
     },
-    acctBal(el) { const a = state.accounts.find((x) => x.id === el.dataset.id); a.balance = num(el.value); a.example = false; a.updated = todayISO(); a.manualOn = todayISO(); delete a.asOf; snapshotNet(); commit(); },
+    acctBal(el) { const a = state.accounts.find((x) => x.id === el.dataset.id); a.baseBal = num(el.value); a.baseDate = todayISO(); a.baseAt = Date.now(); a.balance = num(el.value); a.example = false; a.updated = todayISO(); a.manualOn = todayISO(); delete a.asOf; snapshotNet(); commit(); },
     showTaxCal(el) { state.ui.showTaxCal = el.checked; commit(); },
     theme(el) { state.ui.theme = el.value; applyTheme(); save(); },
     restore(el) {
@@ -4041,9 +4340,9 @@
      ================================================================== */
   function formData(f) { const d = {}; new FormData(f).forEach((v, k) => (d[k] = v)); return d; }
   /* "Just look around" mode: example data you can browse but not change */
-  const LOOK_OK_ACTS = new Set(["openFeed", "month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
+  const LOOK_OK_ACTS = new Set(["reportExport", "openFeed", "month", "nextFact", "openLesson", "pageHelp", "pennyPoke", "copy", "closeCheer", "startSetup", "openWizard", "syncKeepAccount", "syncKeepDevice", "syncNow", "lookMine", "lookKeep",
     "wzStart", "wzSignIn", "wzAuthToggle", "wzAuthSkip", "wzCheckAgain", "wzSetupHere", "wzExample", "wzHome", "wzLater", "wzBack", "wzSkip", "wzCheckin"]);
-  const LOOK_OK_CHANGES = new Set(["txSearch", "txCat", "calmMode", "celebrate"]);
+  const LOOK_OK_CHANGES = new Set(["txSearch", "txCat", "calmMode", "celebrate", "reportYear", "reportCat"]);
   function lookOnlyBlocks(el, kind) {
     if (!state || !state.isExample || !el || !el.closest) return false;
     if (el.closest("#wizard, .sync-card, .look-nudge")) return false;
@@ -4095,6 +4394,7 @@
     let searchTimer;
     document.addEventListener("input", (e) => {
       const el = e.target;
+      if (el && el.closest && el.closest('form[data-form="saveSplit"]')) splitLeft();
       // add/edit transaction: pick the category from what you type (until you tap one yourself)
       if (el.name === "desc" && el.closest && el.closest('form[data-form="saveTx"]')) {
         const f = el.form, box = f.querySelector("#catPick");

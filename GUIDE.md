@@ -254,6 +254,16 @@ The anon key is safe to be public. The rules in step 2 are what keep everyone's 
 - Sync works on the website. The preview inside Claude can't connect to outside servers, so it shows a link to the website instead.
 - Forgot your password? There's no reset button yet. You can delete the user in Supabase (Authentication, Users) and they can sign up again from a device that has their data.
 
+## Reports, notes, splits and more
+
+- **Snout Reports (Reports page):** every month of the year (money in, spent, saved), this month vs last month, this year vs last year, and a 12 month trend for any category. "Year summary (CSV)" downloads the whole year.
+- **Penny noticed (Home):** up to 3 short notes from your own numbers, like a budget moving fast, card debt while cash sits in chequing, or how many months your cash would last. "Not now" hides a note for the rest of the month.
+- **Split a purchase:** edit a transaction and tap Split. One Costco trip can be part Groceries, part Shopping. The parts always add up to the total, and a statement with the full amount is still caught as a duplicate. "Undo split" joins them back.
+- **Recently deleted:** deleting a transaction, bill, goal, account or reminder shows an Undo. Everything waits on My data for 30 days, then it's gone for good.
+- **Roll over:** edit a budget category and tick Roll over. Money you don't spend carries into next month, and going over takes it off next month. It counts from the month you turn it on.
+- **Auto-updating balances:** edit an account and tick "Keep this balance up to date". From then on, transactions linked to that account move it (money in adds, money out takes away, and the other way round for a credit card). Link a transaction when you add or edit it, or pick the account when you import a file. A statement balance resets the starting point, so nothing is counted twice.
+- **Returns:** money back from a store (a return on your card) goes to Returns. It comes off the budget it was bought in instead of counting as income. Edit a return to change which budget it comes off.
+
 ## What it can't do (and why)
 
 - **Connect to your bank automatically.** Apps that do this pay companies like Plaid or Flinks per user. Bank CSV import gets you the same data for free.
